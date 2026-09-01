@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tribi ERP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        // Pre-detect reference mode to prevent screen flickering
+        if (window.location.search.includes('reference=1')) {
+            document.documentElement.classList.add('in-reference-mode');
+        }
+    </script>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="brand">Tribi ERP</a>
+        <a href="/work-order">Work orders</a>
+        <a href="/grn">GRN</a>
+        <a href="/purchase-order">Purchase orders</a>
+        <a href="/hsn">HSN Details</a>
+        <a href="/issue-transaction">Issue Transaction</a>
+        <a href="/storage">Storage</a>
+        <div class="nav-right">
+            {% if session.get('user_id') %}
+                <span style="color: rgba(255, 255, 255, 0.7); font-size: 13px; margin-right: 8px;">
+                    👤 {{ session['full_name'] }} ({{ session['role'] | upper }})
+                </span>
+                <a href="/settings" style="padding: 4px 8px;">⚙️ Settings</a>
+                <a href="/logout" style="color: #fca5a5; padding: 4px 8px; font-weight: 600;">Logout</a>
+            {% else %}
+                Tribi Systems
+            {% endif %}
+        </div>
+    </nav>
+    <div class="app-split-container" id="appSplitContainer">
+        <div class="page-content-wrapper">
+            <div class="page">
+                {% if policy_expired_alert %}
+                <div style="background: #fef2f2; border: 1px solid #fca5a5; border-left: 5px solid #ef4444; color: #991b1b; padding: 12px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(239, 68, 68, 0.1);">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 18px;">⚠️</span>
+                        <span>{{ policy_alert_message or 'The duration for the existing policy number has expired, please change the date/ policy condition.' }}</span>
+                    </div>
+                    <a href="/settings" class="btn btn-danger" style="font-size: 12px; padding: 5px 14px; text-decoration: none; font-weight: 600; flex-shrink: 0;">Update Policy Settings →</a>
+                </div>
+                {% endif %}
+                {% block content %}{% endblock %}
+            </div>
+        </div>
+        <div class="resizer-handle" id="resizerHandle" style="display: none;"></div>
+        <div class="reference-sidebar" id="referenceSidebar" style="display: none;">
+            <div class="reference-sidebar-header">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span class="reference-sidebar-title" id="referenceSidebarTitle">Reference View</span>
+                    <select id="sidebarRefSelector" class="input-field" onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 3px 8px; height: 28px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; color: #1e293b; cursor: pointer;">
+                        <option value="work-order">📋 Work Orders</option>
+                        <option value="purchase-order">🛒 Purchase Orders</option>
+                        <option value="storage">📦 Storage</option>
+                    </select>
+                </div>
+                <button type="button" class="close-ref-btn" onclick="toggleSplitScreen()">&times;</button>
+            </div>
+            <div class="reference-sidebar-body">
+                <iframe id="referenceIframe" src="about:blank"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Helper to append query parameter safely
+        function appendQueryParam(url, key, value) {
+            try {
+                const urlObj = new URL(url, window.location.origin);
+                urlObj.searchParams.set(key, value);
+                return urlObj.pathname + urlObj.search + urlObj.hash;
+            } catch(e) {
+                return url + (url.includes('?') ? '&' : '?') + key + '=' + value;
+            }
+        }
+
+        // Switch reference window target (Work Orders, Purchase Orders, Storage)
+        function switchRefWindow(targetType) {
+            if (!targetType) return;
+            if (window.self !== window.top || window.location.search.includes('reference=1')) {
+                return;
+            }
+            const container = document.getElementById('appSplitContainer');
+            const sidebar = document.getElementById('referenceSidebar');
+            const resizer = document.getElementById('resizerHandle');
+            const iframe = document.getElementById('referenceIframe');
+            const selector = document.getElementById('sidebarRefSelector');
+
+            sessionStorage.setItem('splitScreenActive', 'true');
+            sessionStorage.setItem('splitTargetType', targetType);
+
+            if (selector) selector.value = targetType;
+
+            container.classList.add('split-active');
+            sidebar.style.display = 'flex';
+            resizer.style.display = 'block';
+
+            let defaultUrl = '/' + targetType;
+            let savedUrl = sessionStorage.getItem('referenceUrl_' + targetType);
+            let targetUrl = savedUrl || defaultUrl;
+
+            targetUrl = appendQueryParam(targetUrl, 'reference', '1');
+            iframe.src = targetUrl;
+
+            const savedWidth = sessionStorage.getItem('splitWidth');
+            if (savedWidth) {
+                sidebar.style.width = savedWidth;
+            }
+        }
+
+        // Toggle split screen mode
+        function toggleSplitScreen(targetType) {
+            // Prevent split screen layout from nested rendering inside reference iframe
+            if (window.self !== window.top || window.location.search.includes('reference=1')) {
+                return;
+            }
+            const container = document.getElementById('appSplitContainer');
+            const sidebar = document.getElementById('referenceSidebar');
+            const resizer = document.getElementById('resizerHandle');
+            const iframe = document.getElementById('referenceIframe');
+            
+            const isActive = sessionStorage.getItem('splitScreenActive') === 'true';
+            
+            if (isActive) {
+                // Deactivate
+                sessionStorage.setItem('splitScreenActive', 'false');
+                container.classList.remove('split-active');
+                sidebar.style.display = 'none';
+                resizer.style.display = 'none';
+                iframe.src = 'about:blank';
+            } else {
+                // Activate
+                if (!targetType) {
+                    targetType = sessionStorage.getItem('splitTargetType') || 'work-order';
+                }
+                switchRefWindow(targetType);
+            }
+        }
+
+        // Initialize split screen on page load if active
+        document.addEventListener('DOMContentLoaded', function() {
+            // Prevent split screen layout from nested rendering inside reference iframe
+            if (window.self !== window.top || window.location.search.includes('reference=1')) {
+                return;
+            }
+            const isCurrentlyActive = sessionStorage.getItem('splitScreenActive') === 'true';
+            const path = window.location.pathname;
+            const isWoPage = path.startsWith('/work-order');
+            const isPoPage = path.startsWith('/purchase-order');
+            const isGrnPage = path.startsWith('/grn');
+            
+            // Auto-restore on work-order, purchase-order, or grn pages
+            if (isCurrentlyActive && (isWoPage || isPoPage || isGrnPage)) {
+                let targetType = sessionStorage.getItem('splitTargetType');
+                if (!targetType) {
+                    if (isWoPage) targetType = 'purchase-order';
+                    else if (isPoPage) targetType = 'work-order';
+                    else targetType = 'work-order';
+                }
+                
+                switchRefWindow(targetType);
+            }
+
+            // Drag Resizing Logic
+            const resizer = document.getElementById('resizerHandle');
+            const sidebar = document.getElementById('referenceSidebar');
+            let isResizing = false;
+
+            if (resizer && sidebar) {
+                resizer.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    isResizing = true;
+                    document.body.style.cursor = 'col-resize';
+                    // Disable pointer events on iframe while dragging to prevent drag loss
+                    document.getElementById('referenceIframe').style.pointerEvents = 'none';
+                });
+
+                document.addEventListener('mousemove', function(e) {
+                    if (!isResizing) return;
+                    const width = window.innerWidth - e.clientX;
+                    const minWidth = window.innerWidth * 0.2;
+                    const maxWidth = window.innerWidth * 0.8;
+                    
+                    if (width > minWidth && width < maxWidth) {
+                        const widthPercent = (width / window.innerWidth) * 100 + '%';
+                        sidebar.style.width = widthPercent;
+                        sessionStorage.setItem('splitWidth', widthPercent);
+                    }
+                });
+
+                document.addEventListener('mouseup', function(e) {
+                    if (isResizing) {
+                        isResizing = false;
+                        document.body.style.cursor = '';
+                        document.getElementById('referenceIframe').style.pointerEvents = 'auto';
+                    }
+                });
+            }
+
+            // Intercept iframe navigation to save URL and propagate reference parameter
+            const iframe = document.getElementById('referenceIframe');
+            if (iframe) {
+                iframe.addEventListener('load', function() {
+                    try {
+                        const iframeWindow = this.contentWindow;
+                        const iframeLocation = iframeWindow.location;
+                        
+                        // Save the current URL to sessionStorage (relative path)
+                        const relativePath = iframeLocation.pathname + iframeLocation.search + iframeLocation.hash;
+                        if (relativePath && relativePath !== 'blank') {
+                            const targetType = sessionStorage.getItem('splitTargetType') || 'work-order';
+                            sessionStorage.setItem('referenceUrl_' + targetType, relativePath);
+                        }
+                        
+                        // Set the sidebar title to the iframe document's title or page heading
+                        const iframeTitle = iframeWindow.document.title || (iframeWindow.document.querySelector('h1') ? iframeWindow.document.querySelector('h1').innerText : '');
+                        if (iframeTitle && iframeTitle !== 'Tribi ERP') {
+                            document.getElementById('referenceSidebarTitle').innerText = 'Reference: ' + iframeTitle;
+                        }
+                        
+                        // Intercept all link clicks inside the iframe to ensure reference=1 query param is preserved
+                        iframeWindow.document.addEventListener('click', function(e) {
+                            const a = e.target.closest('a');
+                            if (a && a.href && a.href.startsWith(window.location.origin)) {
+                                if (a.getAttribute('href').startsWith('#')) return;
+                                
+                                const url = new URL(a.href);
+                                if (!url.searchParams.has('reference')) {
+                                    url.searchParams.set('reference', '1');
+                                    a.href = url.toString();
+                                }
+                            }
+                        });
+                    } catch (e) {
+                        console.error("Iframe origin policy block or error:", e);
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

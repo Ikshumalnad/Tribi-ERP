@@ -1,0 +1,582 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    font-family: Arial, sans-serif;
+    background: #f4f6f9;
+    color: #333;
+    width: 100%;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.navbar {
+    background-color: #1a2e4a;
+    padding: 0 24px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.navbar .brand {
+    font-size: 16px;
+    font-weight: bold;
+    color: #fff;
+    margin-right: 24px;
+    text-decoration: none;
+}
+
+.navbar a {
+    color: rgba(255,255,255,0.75);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 4px;
+}
+
+.navbar a:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+.navbar .nav-right {
+    margin-left: auto;
+    color: rgba(255,255,255,0.8);
+    font-size: 13px;
+}
+
+.page {
+    padding: 28px;
+}
+
+.greeting h1 {
+    font-size: 22px;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.greeting p {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 24px;
+}
+
+.module-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.module-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 20px;
+}
+
+.module-card h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: #1a2e4a;
+}
+
+.module-card .subtitle {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 16px;
+}
+
+.stats-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.stat {
+    flex: 1;
+    background: #f4f6f9;
+    border-radius: 6px;
+    padding: 10px 12px;
+}
+
+.stat .label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 4px;
+}
+
+.stat .value {
+    font-size: 22px;
+    font-weight: 600;
+    color: #1a2e4a;
+}
+
+.stat .value.warn { color: #e67e22; }
+.stat .value.danger { color: #e74c3c; }
+.stat .value.success { color: #27ae60; }
+
+.go-btn {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    background: transparent;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #1a2e4a;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.go-btn:hover { background: #f4f6f9; }
+
+.bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.panel {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 20px;
+}
+
+.panel h3 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #888;
+    margin-bottom: 14px;
+}
+
+.alert-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+}
+
+.alert-item:last-child { border-bottom: none; }
+
+.alert-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-top: 4px;
+    flex-shrink: 0;
+}
+
+.dot-danger { background: #e74c3c; }
+.dot-warn { background: #e67e22; }
+.dot-active { background: #2563eb; }
+.dot-success { background: #16a34a; }
+
+.alert-text { color: #333; line-height: 1.5; }
+.alert-sub { font-size: 11px; color: #999; margin-top: 2px; }
+
+.activity-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+}
+
+.activity-item:last-child { border-bottom: none; }
+.act-text { flex: 1; color: #333; }
+.act-time { font-size: 11px; color: #999; white-space: nowrap; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 14px;
+}
+
+th {
+    background: #1a2e4a;
+    color: #fff;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 500;
+    font-size: 13px;
+}
+
+td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #f9f9f9; }
+
+.btn, .btn-primary, .btn-secondary, .btn-warning, .btn-danger, .btn-success, .btn-dark, .btn-outline {
+    padding: 6px 12px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    font-family: inherit;
+    text-align: center;
+    transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.btn-primary { background-color: #1a2e4a; color: #fff; border-color: #1a2e4a; }
+.btn-primary:hover { background-color: #111e30; border-color: #111e30; }
+
+.btn-success { background-color: #27ae60; color: #fff; border-color: #27ae60; }
+.btn-success:hover { background-color: #1e7e46; border-color: #1e7e46; }
+
+.btn-warning { background-color: #e67e22; color: #fff; border-color: #e67e22; }
+.btn-warning:hover { background-color: #b86214; border-color: #b86214; }
+
+.btn-danger { background-color: #e74c3c; color: #fff; border-color: #e74c3c; }
+.btn-danger:hover { background-color: #c0392b; border-color: #c0392b; }
+
+.btn-secondary { background-color: #95a5a6; color: #fff; border-color: #95a5a6; }
+.btn-secondary:hover { background-color: #7f8c8d; border-color: #7f8c8d; }
+
+.btn-dark { background-color: #2d3748; color: #fff; border-color: #2d3748; }
+.btn-dark:hover { background-color: #1a202c; border-color: #1a202c; }
+
+.btn-outline {
+    background-color: transparent;
+    border-color: #cbd5e1;
+    color: #4a5568;
+}
+.btn-outline:hover {
+    background-color: #f8fafc;
+    color: #1a2e4a;
+    border-color: #94a3b8;
+}
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.form-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 24px;
+    max-width: 640px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #444;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.form-group textarea { resize: vertical; }
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.search-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    align-items: center;
+}
+
+.search-bar input {
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 13px;
+    width: 280px;
+}
+
+.search-bar select {
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 13px;
+}
+
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.page-header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #1a2e4a;
+}
+
+.breadcrumb {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 6px;
+}
+
+.breadcrumb a {
+    color: #888;
+    text-decoration: none;
+}
+
+.breadcrumb a:hover { color: #1a2e4a; }
+
+.badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.badge-open { background: #d6eaf8; color: #1a5276; }
+.badge-inprogress { background: #fdebd0; color: #784212; }
+.badge-active { background: #d5f5e3; color: #1e8449; }
+.badge-closed { background: #f0f0f0; color: #666; }
+.badge-cancelled { background: #fadbd8; color: #922b21; }
+.badge-reopened { background: #e8daef; color: #6c3483; }
+
+.alert {
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+.alert-success { background: #d5f5e3; color: #1e8449; border: 1px solid #a9dfbf; }
+.alert-error   { background: #fadbd8; color: #922b21; border: 1px solid #f1948a; }
+.alert-warning { background: #fdebd0; color: #784212; border: 1px solid #f0b27a; }
+
+/* ─── SPLIT SCREEN & REFERENCE SIDEBAR ─────────────────── */
+.app-split-container {
+    display: block;
+    width: 100%;
+    position: relative;
+}
+
+.app-split-container.split-active {
+    display: flex;
+    height: calc(100vh - 52px); /* 52px navbar height */
+    overflow: auto !important;
+}
+
+.page-content-wrapper {
+    flex: 1;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+}
+
+.app-split-container.split-active .page-content-wrapper {
+    height: 100%;
+}
+
+.resizer-handle {
+    width: 6px;
+    background: #cbd5e1;
+    cursor: col-resize;
+    position: relative;
+    z-index: 100;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+
+.resizer-handle:hover, .resizer-handle:active {
+    background: #1a2e4a;
+}
+
+.reference-sidebar {
+    width: 45%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #f8fafc;
+    border-left: 1px solid #cbd5e1;
+    flex-shrink: 0;
+    min-width: 250px;
+    overflow: hidden;
+}
+
+.reference-sidebar-header {
+    height: 48px;
+    background: #1a2e4a;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    flex-shrink: 0;
+}
+
+.reference-sidebar-title {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.close-ref-btn {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 24px;
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+}
+
+.close-ref-btn:hover {
+    opacity: 1;
+}
+
+.reference-sidebar-body {
+    flex: 1;
+    background: #fff;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch;
+}
+
+.reference-sidebar-body iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    overflow: auto;
+}
+
+/* ─── REFERENCE MODE (READ-ONLY) STYLING ───────────────── */
+html.in-reference-mode .navbar {
+    display: none !important;
+}
+
+html.in-reference-mode .breadcrumb {
+    display: none !important;
+}
+
+html.in-reference-mode .page {
+    padding: 16px !important;
+}
+
+html.in-reference-mode .page-header {
+    margin-bottom: 12px !important;
+}
+
+/* Hide add/edit/delete buttons and form action containers in reference mode */
+html.in-reference-mode .page-header a[href*="/edit"],
+html.in-reference-mode .page-header a[href*="/add"],
+html.in-reference-mode a[href*="/edit"],
+html.in-reference-mode a[href*="/add"],
+html.in-reference-mode .btn-warning,
+html.in-reference-mode .btn-danger,
+html.in-reference-mode .btn-success,
+html.in-reference-mode #btn-add-item,
+html.in-reference-mode #btn-select-mode,
+html.in-reference-mode #btn-select-all,
+html.in-reference-mode #btn-remove-selected,
+html.in-reference-mode #btn-cancel-select,
+html.in-reference-mode .form-actions,
+html.in-reference-mode form button,
+html.in-reference-mode tr td:last-child button,
+html.in-reference-mode tr td:last-child a[href*="/edit"],
+html.in-reference-mode .ref-toggle-btn {
+    display: none !important;
+}
+
+/* Hide the actions column in reference lists/details */
+html.in-reference-mode th:last-child,
+html.in-reference-mode td:last-child {
+    display: none !important;
+}
+
+/* Stylize input controls to look like plain static text */
+html.in-reference-mode input,
+html.in-reference-mode select,
+html.in-reference-mode textarea {
+    pointer-events: none !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    color: #333 !important;
+    font-weight: 600 !important;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+}
+
+html.in-reference-mode input[type="checkbox"] {
+    display: none !important;
+}
+
+html.in-reference-mode form {
+    pointer-events: none !important;
+}
+
+/* Hide sidebar and divider inside the reference window */
+html.in-reference-mode .reference-sidebar,
+html.in-reference-mode .resizer-handle {
+    display: none !important;
+}
+
+/* ─── GLOBAL RESPONSIVE & REFERENCE WINDOW SCROLLING ───── */
+.table-wrapper {
+    width: 100%;
+    overflow-x: auto !important;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+html.in-reference-mode,
+html.in-reference-mode body {
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    height: 100% !important;
+    width: 100% !important;
+}
+
+html.in-reference-mode .page-content-wrapper,
+html.in-reference-mode .page {
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    min-height: 100%;
+}

@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header" style="max-width: 1100px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center;">
+    <div>
+        <h1 style="margin: 0; font-size: 24px; color: #0f172a; font-weight: 800;">GRN Details — {{ grn.grn_no }}</h1>
+        <p style="margin: 4px 0 0; font-size: 13px; color: #64748b;">Complete Goods Received Note summary and item manifest</p>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="/grn" class="btn-outline" style="font-weight: 600; padding: 8px 16px;">← Back to List</a>
+        {% if grn.grn_type == 4 %}
+        <button type="button" class="btn-outline" onclick="openModifyTypeModal('{{ grn.grn_id }}', '{{ grn.grn_no }}')" style="font-weight: 600; padding: 8px 16px; border-color: #2563eb; color: #1d4ed8; background: #eff6ff;">Modify Type</button>
+        {% endif %}
+        <a href="/grn/{{ grn.grn_id }}/qc" class="btn-primary" style="font-weight: 600; padding: 8px 18px; background-color: #0d9488; border-color: #0d9488;">QC Inspection</a>
+    </div>
+</div>
+
+<div style="max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px;">
+
+    <!-- Executive Overview Cards Grid (3 Columns) -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
+        
+        <!-- Card 1: GRN Metadata -->
+        <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 15px; color: #1e293b; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                <span style="color: #2563eb;">📋</span> GRN Identification
+            </h3>
+            <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">GRN Number</span>
+                    <strong style="color: #0f172a; font-size: 14px;">{{ grn.grn_no }}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Type of GRN</span>
+                    <span class="badge {% if grn.grn_type == 1 %}badge-inprogress{% elif grn.grn_type == 0 %}badge-open{% elif grn.grn_type == 3 %}badge-active{% elif grn.grn_type == 4 %}badge-reopened{% else %}badge-reopened{% endif %}">
+                        {{ grn.grn_type_label }}
+                    </span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">GRN Status</span>
+                    <span class="badge {{ grn.status_badge }}">
+                        {{ grn.status or 'Received Item(s)' }}
+                    </span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Created On</span>
+                    <span style="color: #334155;">{{ grn.created_at or 'N/A' }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Card 2: Vendor & Reference Info -->
+        <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 15px; color: #1e293b; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                <span style="color: #059669;">🏢</span> Reference & Source
+            </h3>
+            <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Vendor Name</span>
+                    <strong style="color: #0f172a;">{{ grn.vendor_short_name or grn.vendor_full_name or '—' }}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Invoice Number</span>
+                    <span style="color: #1e293b; font-weight: 600;">{{ grn.invoice_no or '—' }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Invoice Date</span>
+                    <span style="color: #334155;">{{ grn.invoice_date or '—' }}</span>
+                </div>
+                {% if grn.po_number %}
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">PO Number</span>
+                    <span style="color: #2563eb; font-weight: 700;">{{ grn.po_number }}</span>
+                </div>
+                {% endif %}
+                {% if wo_ref %}
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Work Order</span>
+                    <span style="color: #7c3aed; font-weight: 700;">WO #{{ wo_ref.wo_number }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Card 3: Personnel & Inspection Details -->
+        <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 15px; color: #1e293b; font-weight: 700; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                <span style="color: #d97706;">👤</span> Personnel & QC Info
+            </h3>
+            <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Received / Returned By</span>
+                    <span style="color: #0f172a; font-weight: 600;">{{ grn.received_by or '—' }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Received Date</span>
+                    <span style="color: #334155;">{{ grn.received_date or '—' }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Inspected By</span>
+                    <span style="color: #334155;">{{ grn.inspected_by or 'Pending Inspection' }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #64748b; font-weight: 500;">Inspection Date</span>
+                    <span style="color: #334155;">{{ grn.inspection_date or '—' }}</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Header Remarks / Project Notes Banner -->
+    {% if grn.remarks %}
+    <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #3b82f6; border-radius: 8px; padding: 16px 20px;">
+        <span style="font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 4px;">Header Remarks / Project Notes</span>
+        <p style="margin: 0; font-size: 14px; color: #1e293b; font-weight: 500;">{{ grn.remarks }}</p>
+    </div>
+    {% endif %}
+
+    <!-- Received Items Table Container -->
+    <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 16px; color: #0f172a; font-weight: 700;">Received Line Items Manifest</h3>
+            <span style="background: #f1f5f9; color: #475569; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 12px; border: 1px solid #cbd5e1;">
+                Total Items: {{ grn_items | length if grn_items else 0 }}
+            </span>
+        </div>
+
+        {% if grn_items %}
+        <!-- Item Pinpoint Search Bar with Prediction Dropdown -->
+        <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <div style="position: relative; flex: 1; max-width: 460px;" id="detailItemSearchContainer">
+                <div style="display: flex; align-items: center; position: relative;">
+                    <input type="text" 
+                           id="detailItemSearchInput" 
+                           placeholder="🔍 Search / pinpoint item code, description, MPN..." 
+                           class="search-input" 
+                           style="width: 100%; padding-right: 28px; font-size: 13px; font-weight: 600;"
+                           autocomplete="off">
+                    <button type="button" id="clearDetailSearchBtn" onclick="clearDetailItemSearch()" 
+                            style="display: none; position: absolute; right: 8px; background: none; border: none; font-size: 14px; color: #94a3b8; cursor: pointer;">✕</button>
+                </div>
+                
+                <!-- Prediction Dropdown for items in this GRN -->
+                <div id="detailPredictionsDropdown" 
+                     style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); max-height: 250px; overflow-y: auto; z-index: 1000; margin-top: 4px;">
+                </div>
+            </div>
+            
+            <div id="detailFilterCounter" style="font-size: 12px; color: #64748b; font-weight: 600; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; display: none;">
+                Showing <span id="visibleItemsCount" style="color: #2563eb; font-weight: 700;">{{ grn_items|length }}</span> of {{ grn_items|length }} items
+            </div>
+        </div>
+
+        <div style="border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden;">
+            <table class="data-table" style="margin: 0; width: 100%;">
+                <thead>
+                    <tr style="background: #f8fafc;">
+                        <th style="width: 50px;">#</th>
+                        <th style="width: 90px;">Item ID</th>
+                        <th style="min-width: 150px;">Item Code</th>
+                        <th style="min-width: 220px;">Item Description</th>
+                        <th style="min-width: 140px;">MPN</th>
+                        <th style="width: 90px;">Unit</th>
+                        <th style="width: 120px;">Qty Received</th>
+                        <th style="width: 120px;">QC Status</th>
+                        <th>Item Remarks</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for item in grn_items %}
+                <tr id="grn-item-row-{{ item.item_id }}" 
+                    data-itemcode="{{ item.item_code | lower }}" 
+                    data-itemdesc="{{ (item.item_desc or '') | lower }}" 
+                    data-mpn="{{ (item.mpn or '') | lower }}" 
+                    data-itemid="{{ item.item_id }}">
+                    <td>{{ loop.index }}</td>
+                    <td><span style="font-size:12px; color:#64748b; font-weight:600;">#{{ item.item_id }}</span></td>
+                    <td><strong style="color: #0f172a;">{{ item.item_code }}</strong></td>
+                    <td>{{ item.item_desc or '—' }}</td>
+                    <td><span style="font-size:12px; color:#475569;">{{ item.mpn or '—' }}</span></td>
+                    <td>{{ item.unit or '—' }}</td>
+                    <td><strong style="color: #1e293b; font-size: 14px;">{{ item.qty_received }}</strong></td>
+                    <td>
+                        <span class="badge {% if item.qc_status == 'Accepted' %}badge-active{% elif item.qc_status == 'Rejected' %}badge-cancelled{% else %}badge-inprogress{% endif %}">
+                            {{ item.qc_status or 'Accepted' }}
+                        </span>
+                    </td>
+                    <td>{{ item.remarks or '—' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div style="padding: 40px; text-align: center; color: #64748b; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px;">
+            No line items associated with this GRN.
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+
+<!-- Include Modify Type Modal if Any Type -->
+{% if grn.grn_type == 4 %}
+<div id="modifyTypeModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.5); z-index: 99999; justify-content: center; align-items: center;">
+    <div style="background: #ffffff; padding: 24px 28px; border-radius: 12px; max-width: 450px; width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 18px; color: #1e293b;" id="modalModifyTypeTitle">Modify GRN Type</h3>
+        <p style="font-size: 13px; color: #64748b; margin-top: 0; margin-bottom: 20px;">Select target GRN type to redirect and enter missing details.</p>
+        
+        <form method="get" id="modifyTypeForm" action="/grn/{{ grn.grn_id }}/convert">
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label style="font-weight: 600; font-size: 13px; color: #334155;">Select Target GRN Type <span style="color:red;">*</span></label>
+                <select name="target_type" id="modalTargetTypeSelect" class="input-field" required style="width: 100%; font-size: 14px; padding: 10px 12px; background: #fff;">
+                    <option value="0">Purchase</option>
+                    <option value="1">Back To Store</option>
+                    <option value="2">Internal Return</option>
+                    <option value="3">Online Purchase</option>
+                    <option value="5">Work Order Return</option>
+                </select>
+            </div>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" onclick="closeModifyTypeModal()" class="btn-outline" style="padding: 8px 16px;">Cancel</button>
+                <button type="submit" class="btn-primary" style="padding: 8px 20px; background-color: #2563eb; border-color: #2563eb;">Confirm →</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openModifyTypeModal(grnId, grnNo) {
+    document.getElementById('modifyTypeModal').style.display = 'flex';
+}
+function closeModifyTypeModal() {
+    document.getElementById('modifyTypeModal').style.display = 'none';
+}
+</script>
+{% endif %}
+
+<script>
+const detailSearchInput = document.getElementById('detailItemSearchInput');
+const detailDropdown = document.getElementById('detailPredictionsDropdown');
+const clearDetailBtn = document.getElementById('clearDetailSearchBtn');
+const filterCounter = document.getElementById('detailFilterCounter');
+const visibleItemsCount = document.getElementById('visibleItemsCount');
+
+// Store items available in this GRN for offline/fast prediction matching
+const grnItemsList = [
+    {% if grn_items %}
+    {% for item in grn_items %}
+    {
+        item_id: {{ item.item_id }},
+        item_code: {{ item.item_code | tojson }},
+        item_desc: {{ (item.item_desc or '') | tojson }},
+        mpn: {{ (item.mpn or '') | tojson }},
+        qty_received: {{ item.qty_received | tojson }},
+        qc_status: {{ (item.qc_status or 'Accepted') | tojson }}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+    {% endif %}
+];
+
+if (detailSearchInput) {
+    detailSearchInput.addEventListener('focus', function() {
+        renderDetailPredictions(this.value.trim().toLowerCase());
+    });
+
+    detailSearchInput.addEventListener('input', function() {
+        const query = this.value.trim().toLowerCase();
+        if (clearDetailBtn) clearDetailBtn.style.display = query ? 'block' : 'none';
+        
+        filterDetailTable(query);
+        renderDetailPredictions(query);
+    });
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#detailItemSearchContainer')) {
+            if (detailDropdown) detailDropdown.style.display = 'none';
+        }
+    });
+}
+
+function renderDetailPredictions(q) {
+    if (!detailDropdown) return;
+    const matches = grnItemsList.filter(it => 
+        !q || 
+        (it.item_code && it.item_code.toLowerCase().includes(q)) || 
+        (it.item_desc && it.item_desc.toLowerCase().includes(q)) || 
+        (it.mpn && it.mpn.toLowerCase().includes(q)) ||
+        String(it.item_id).includes(q)
+    );
+
+    if (matches.length === 0) {
+        detailDropdown.innerHTML = '<div style="padding: 10px 14px; font-size: 13px; color: #94a3b8;">No matching items in this GRN.</div>';
+        detailDropdown.style.display = 'block';
+        return;
+    }
+
+    let html = '';
+    matches.forEach(it => {
+        let badgeStyle = 'background: #dcfce7; color: #15803d;';
+        if (it.qc_status === 'Rejected') badgeStyle = 'background: #fee2e2; color: #b91c1c;';
+        else if (it.qc_status !== 'Accepted') badgeStyle = 'background: #fef3c7; color: #b45309;';
+
+        html += '<div class="detail-pred-item" onclick="pinpointDetailItem(' + it.item_id + ', \'' + escapeJsDetail(it.item_code) + '\')" style="padding: 8px 12px; border-bottom: 1px solid #f1f5f9; cursor: pointer;">' +
+            '<div style="display: flex; justify-content: space-between; align-items: center;">' +
+                '<strong style="color: #0f172a; font-size: 13px;">' + escapeHtmlDetail(it.item_code) + '</strong>' +
+                '<span style="font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 600; ' + badgeStyle + '">' + escapeHtmlDetail(it.qc_status) + '</span>' +
+            '</div>' +
+            '<div style="font-size: 12px; color: #64748b; margin-top: 2px; display: flex; justify-content: space-between; gap: 8px;">' +
+                '<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;">' + escapeHtmlDetail(it.item_desc) + '</span>' +
+                '<span style="color: #1e293b; font-weight: 600;">Qty: ' + it.qty_received + '</span>' +
+            '</div>' +
+        '</div>';
+    });
+
+    detailDropdown.innerHTML = html;
+    detailDropdown.style.display = 'block';
+
+    document.querySelectorAll('.detail-pred-item').forEach(el => {
+        el.addEventListener('mouseenter', () => el.style.background = '#eff6ff');
+        el.addEventListener('mouseleave', () => el.style.background = '#ffffff');
+    });
+}
+
+function filterDetailTable(q) {
+    const rows = document.querySelectorAll('tr[id^="grn-item-row-"]');
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+        const code = row.getAttribute('data-itemcode') || '';
+        const desc = row.getAttribute('data-itemdesc') || '';
+        const mpn = row.getAttribute('data-mpn') || '';
+        const id = row.getAttribute('data-itemid') || '';
+
+        if (!q || code.includes(q) || desc.includes(q) || mpn.includes(q) || id.includes(q)) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    if (filterCounter) {
+        if (q) {
+            filterCounter.style.display = 'block';
+            if (visibleItemsCount) visibleItemsCount.innerText = visibleCount;
+        } else {
+            filterCounter.style.display = 'none';
+        }
+    }
+}
+
+function pinpointDetailItem(itemId, itemCode) {
+    if (detailSearchInput) detailSearchInput.value = itemCode;
+    if (clearDetailBtn) clearDetailBtn.style.display = 'block';
+    if (detailDropdown) detailDropdown.style.display = 'none';
+
+    filterDetailTable(itemCode.toLowerCase());
+
+    const targetRow = document.getElementById('grn-item-row-' + itemId);
+    if (targetRow) {
+        targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        targetRow.style.transition = 'background-color 0.3s ease';
+        targetRow.style.backgroundColor = '#fef08a';
+        setTimeout(() => {
+            targetRow.style.backgroundColor = '#dbeafe';
+            setTimeout(() => {
+                targetRow.style.backgroundColor = '';
+            }, 1200);
+        }, 800);
+    }
+}
+
+function clearDetailItemSearch() {
+    if (detailSearchInput) detailSearchInput.value = '';
+    if (clearDetailBtn) clearDetailBtn.style.display = 'none';
+    if (detailDropdown) detailDropdown.style.display = 'none';
+    filterDetailTable('');
+}
+
+function escapeHtmlDetail(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function escapeJsDetail(str) {
+    if (!str) return '';
+    return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+</script>
+
+{% endblock %}

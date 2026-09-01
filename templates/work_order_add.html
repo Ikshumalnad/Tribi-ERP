@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="breadcrumb"><a href="/">Dashboard</a> / <a href="/work-order">Work orders</a> / New</div>
+
+<div class="page-header">
+    <h1>New work order</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('purchase-order')">🛒 Refer to Purchase Orders</button>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card">
+    <form method="POST" enctype="multipart/form-data" id="woAddForm">
+
+        <div class="form-group">
+            <label>WO Number</label>
+            <input type="text" value="Auto generated" disabled style="background:#f4f6f9; color:#888;">
+        </div>
+
+        <div class="form-group">
+            <label>Import BOM / Purchase Excel File (.xlsx)</label>
+            <input type="file" name="bom_file" id="bomFile" accept=".xlsx" required style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-size:14px; box-sizing:border-box;">
+            
+            <!-- Loading Indicator -->
+            <div id="bomLoading" style="margin-top:10px; display:none; align-items:center; gap:8px; font-size:13px; color:#475569;">
+                <svg class="animate-spin" style="animation: spin 1s linear infinite; width:16px; height:16px;" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="12" cy="12" r="10" stroke="#cbd5e1" stroke-width="4"></circle>
+                    <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="#2563eb"></path>
+                </svg>
+                <span>Parsing Excel sheet...</span>
+            </div>
+
+            <!-- Parsed BOM Card -->
+            <div id="bomStatus" style="margin-top:12px; display:none;">
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; display:flex; flex-direction:column; gap:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px;">
+                        <span style="font-size:12px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Detected sheet</span>
+                        <span id="detectedSheet" style="font-size:12px; font-weight:600; color:#0f172a; font-family:monospace; background:#e2e8f0; padding:2px 6px; border-radius:4px;">-</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px;">
+                        <span style="font-size:12px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">BOM Number</span>
+                        <span id="detectedBomCode" style="font-size:14px; font-weight:700; color:#2563eb;">-</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <span style="font-size:12px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">BOM Description</span>
+                        <span id="detectedBomDesc" style="font-size:13px; color:#334155; font-weight:500; text-align:right; max-width:70%;">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error Display -->
+            <div id="bomStatusError" style="margin-top:12px; display:none; background:#fef2f2; border:1px solid #fee2e2; border-radius:8px; padding:14px; color:#991b1b; font-size:13px; font-weight: 500; line-height:1.5;">
+                <!-- Error message goes here -->
+            </div>
+            
+            <input type="hidden" name="bom_id" id="hiddenBomId">
+        </div>
+
+        <div class="form-group">
+            <label>No of sets</label>
+            <input type="number" name="qty_to_build" id="qtyToBuild" min="1" required placeholder="Enter number of sets">
+        </div>
+
+        <div class="form-group">
+            <label>Description</label>
+            <input type="text" name="description" placeholder="Enter description (Will default to BOM description if empty)">
+        </div>
+
+        <div class="form-group">
+            <label>Created by</label>
+            <input type="text" name="created_by" placeholder="Your name">
+        </div>
+
+        <div class="form-group">
+            <label>Remarks</label>
+            <textarea name="remarks" rows="3" placeholder="Any remarks"></textarea>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" name="action" value="draft" id="btnSaveDraft" class="btn btn-secondary">Save draft</button>
+            <button type="submit" name="action" value="calculate" id="btnCalculate" class="btn btn-primary">Calculate requirements</button>
+            <a href="/work-order" class="btn btn-secondary">Cancel</a>
+        </div>
+
+    </form>
+</div>
+
+<style>
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+</style>
+
+<script>
+document.getElementById('bomFile').addEventListener('change', function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+
+    var formData = new FormData();
+    formData.append('bom_file', file);
+
+    var loadingDiv = document.getElementById('bomLoading');
+    var statusDiv = document.getElementById('bomStatus');
+    var errorDiv = document.getElementById('bomStatusError');
+    var hiddenBomId = document.getElementById('hiddenBomId');
+    var btnSaveDraft = document.getElementById('btnSaveDraft');
+    var btnCalculate = document.getElementById('btnCalculate');
+
+    // Show loading, hide others
+    loadingDiv.style.display = 'flex';
+    statusDiv.style.display = 'none';
+    errorDiv.style.display = 'none';
+    hiddenBomId.value = '';
+
+    fetch('/work-order/parse-bom-file', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        loadingDiv.style.display = 'none';
+        if (data.status === 'success') {
+            document.getElementById('detectedSheet').innerText = data.sheet_name;
+            document.getElementById('detectedBomCode').innerText = data.bom_code;
+            document.getElementById('detectedBomDesc').innerText = data.description;
+            statusDiv.style.display = 'block';
+            hiddenBomId.value = data.bom_id;
+            
+            // Re-enable form submits
+            btnSaveDraft.disabled = false;
+            btnCalculate.disabled = false;
+        } else if (data.status === 'not_found') {
+            // Found the sheet name but not in database
+            document.getElementById('detectedSheet').innerText = data.sheet_name;
+            document.getElementById('detectedBomCode').innerText = data.bom_code;
+            document.getElementById('detectedBomDesc').innerText = 'Not found in database';
+            statusDiv.style.display = 'block';
+            
+            errorDiv.innerText = data.message;
+            errorDiv.style.display = 'block';
+            
+            // Disable form submits since the database requires a valid bom_id
+            btnSaveDraft.disabled = true;
+            btnCalculate.disabled = true;
+        } else {
+            errorDiv.innerText = data.message;
+            errorDiv.style.display = 'block';
+            
+            btnSaveDraft.disabled = true;
+            btnCalculate.disabled = true;
+        }
+    })
+    .catch(error => {
+        loadingDiv.style.display = 'none';
+        errorDiv.innerText = 'Network error: Failed to parse Excel file.';
+        errorDiv.style.display = 'block';
+        
+        btnSaveDraft.disabled = true;
+        btnCalculate.disabled = true;
+    });
+});
+
+// Prevent form submission if fields are invalid or missing
+document.getElementById('woAddForm').addEventListener('submit', function(e) {
+    var hiddenBomId = document.getElementById('hiddenBomId').value;
+    if (!hiddenBomId) {
+        e.preventDefault();
+        alert('Please upload a valid Excel file containing a database-registered BOM sheet.');
+    }
+});
+</script>
+
+{% endblock %}

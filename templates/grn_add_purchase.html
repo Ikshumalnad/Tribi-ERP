@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header" style="max-width: 1100px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center;">
+    <h1>{% if is_convert %}Modify GRN Type — {{ grn_no }}{% else %}New Purchase GRN — {{ grn_no }}{% endif %}</h1>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="{% if is_convert %}/grn{% else %}/grn/add{% endif %}" class="btn-outline">← Back</a>
+    </div>
+</div>
+
+<div class="form-card" style="max-width: 1100px; width: 100%; margin: 0 auto; padding: 32px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); box-sizing: border-box;">
+    <form method="post" action="{% if is_convert %}/grn/{{ grn.grn_id }}/convert{% else %}/grn/add/purchase{% endif %}" id="purchaseGrnForm">
+        <input type="hidden" name="grn_no" value="{{ grn_no }}">
+        {% if is_convert %}
+        <input type="hidden" name="target_type" value="{{ target_type }}">
+        {% endif %}
+
+        <!-- Single Searchable Purchase Order Selection Box -->
+        <div style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 22px; border-radius: 10px; margin-bottom: 24px; position: relative;">
+            <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 16px; color: #1a2e4a; font-weight: 700;">1. Purchase Order Selection</h3>
+            
+            <div class="form-group" style="margin-bottom: 0; position: relative;">
+                <label style="font-size: 13px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">
+                    Type or Select Approved Purchase Order <span style="color:red;">*</span>
+                </label>
+                <div style="position: relative;">
+                    <input type="text" id="po_search_input" class="input-field" placeholder="Type PO number or vendor name to search..." 
+                           autocomplete="off" required
+                           style="width: 100%; font-size: 14px; padding: 10px 12px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                           onfocus="showPoList()" oninput="filterPoList(this.value)">
+                    <input type="hidden" name="po_id" id="selected_po_id" required>
+                    
+                    <div id="po_dropdown_list" style="display: none; position: absolute; top: 100%; left: 0; right: 0; max-height: 250px; overflow-y: auto; background: #ffffff; border: 1px solid #cbd5e1; border-top: none; border-radius: 0 0 6px 6px; box-shadow: 0 8px 16px rgba(0,0,0,0.12); z-index: 9999;">
+                        {% if purchase_orders %}
+                            {% for po in purchase_orders %}
+                            <div class="po-option-item" data-id="{{ po.po_id }}" data-text="PO #{{ po.po_number }} (v{{ po.po_version_number or '1.0' }}) — {{ po.vendor_short_name or po.vendor_full_name or 'No Vendor' }}"
+                                 onclick="selectPoOption(this)"
+                                 style="padding: 10px 14px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f1f5f9; color: #1e293b; display: flex; justify-content: space-between; align-items: center;">
+                                <span><strong>PO #{{ po.po_number }}</strong> <span style="color: #64748b;">(v{{ po.po_version_number or '1.0' }})</span> — {{ po.vendor_short_name or po.vendor_full_name or 'No Vendor' }}</span>
+                                <span class="badge badge-active" style="font-size: 10px; padding: 2px 8px; margin-left: 8px;">Approved</span>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div style="padding: 14px; color: #888; font-size: 13px; text-align: center;">No Approved Purchase Orders found.</div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: Details & Items Boundary Box -->
+        <div id="po_details_section" style="display: none; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 16px; color: #1a2e4a; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">2. GRN Received Details</h3>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label style="font-weight: 600;">Vendor Name</label>
+                    <input type="text" id="vendor_name_display" readonly class="input-field" style="background-color: #f1f5f9; font-weight: 600; color: #1e293b;">
+                    <input type="hidden" name="vendor_id" id="vendor_id_hidden">
+                </div>
+                <div class="form-group">
+                    <label style="font-weight: 600;">Invoice Number <span style="color:red;">*</span></label>
+                    <input type="text" name="invoice_no" id="invoice_no" class="input-field" value="{{ grn.invoice_no if is_convert and grn else '' }}" placeholder="e.g. INV-2026-001" required>
+                </div>
+                <div class="form-group">
+                    <label style="font-weight: 600;">Invoice Date <span style="color:red;">*</span></label>
+                    <input type="date" name="invoice_date" id="invoice_date" class="input-field" value="{{ grn.invoice_date if is_convert and grn and grn.invoice_date else today }}" required>
+                </div>
+                <div class="form-group">
+                    <label style="font-weight: 600;">Remarks</label>
+                    <input type="text" name="remarks" class="input-field" value="{{ grn.remarks if is_convert and grn else '' }}" placeholder="Optional GRN comments">
+                </div>
+            </div>
+
+            <!-- Items Received Header Bar -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 28px; margin-bottom: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+                <h3 style="margin: 0; font-size: 16px; color: #1a2e4a; font-weight: 700;">Items received</h3>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button type="button" id="btn_toggle_not_received_mode" onclick="toggleNotReceivedMode()" class="btn-outline" style="font-size: 12px; padding: 6px 14px; font-weight: 600; border-color: #cbd5e1; color: #475569;">
+                        ☑ Select Items Not Received
+                    </button>
+                    <button type="button" id="btn_confirm_move" onclick="confirmMoveToNotReceived()" class="btn-primary" style="display: none; font-size: 12px; padding: 6px 14px; background-color: #d97706; border-color: #d97706; font-weight: 600;">
+                        Confirm Move to Not Received
+                    </button>
+                </div>
+            </div>
+
+            <!-- Items Received Table -->
+            <div style="border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; margin-bottom: 24px;">
+                <table class="data-table" id="items-received-table" style="margin: 0; width: 100%;">
+                    <thead>
+                        <tr style="background: #f8fafc;">
+                            <th id="th_checkbox" style="display: none; width: 40px; text-align: center;"><input type="checkbox" onchange="toggleSelectAll(this)"></th>
+                            <th style="width: 50px;">#</th>
+                            <th style="min-width: 140px;">Item Code</th>
+                            <th style="min-width: 220px;">Item Description</th>
+                            <th style="width: 110px;">Qty Ordered</th>
+                            <th style="width: 140px;">Qty Received <span style="color:red;">*</span></th>
+                            <th>Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody id="items-received-body">
+                        <!-- Loaded dynamically via JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Not Received Table Section -->
+            <div id="not_received_container" style="display: none; margin-top: 28px; border: 1px dashed #f59e0b; background: #fffbe6; border-radius: 10px; padding: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                    <h3 style="margin: 0; font-size: 15px; color: #b45309; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                        <span>📦 Not received</span>
+                        <span id="not_received_count_badge" style="background: #fef3c7; color: #b45309; font-size: 12px; padding: 2px 10px; border-radius: 12px; border: 1px solid #fcd34d;">0 items</span>
+                    </h3>
+                    <span style="font-size: 12px; color: #92400e;">Items in this section are marked as not received for this GRN</span>
+                </div>
+                
+                <div style="border: 1px solid #fef3c7; border-radius: 8px; overflow: hidden; background: #fff;">
+                    <table class="data-table" id="not-received-table" style="margin: 0; width: 100%;">
+                        <thead style="background: #fef3c7; color: #92400e;">
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th style="min-width: 140px;">Item Code</th>
+                                <th style="min-width: 220px;">Item Description</th>
+                                <th style="width: 110px;">Qty Ordered</th>
+                                <th style="width: 120px;">Status</th>
+                                <th style="width: 140px; text-align: center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="not-received-body">
+                            <!-- Populated when items moved -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div style="display:flex; gap:12px; margin-top:28px;">
+                <button type="submit" class="btn-primary" style="padding: 10px 24px; font-weight: 600; font-size: 14px;">{% if is_convert %}Save modified GRN Type{% else %}Save GRN{% endif %}</button>
+                <a href="/grn" class="btn-outline" style="padding: 10px 20px; font-size: 14px;">Cancel</a>
+            </div>
+        </div>
+
+        <div id="no_po_selected_notice" style="padding: 40px; text-align: center; color: #64748b; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px;">
+            <p style="margin: 0; font-size: 15px; font-weight: 500;">Please type or select an approved Purchase Order above to view items and enter GRN details.</p>
+        </div>
+
+    </form>
+</div>
+
+<script>
+let poItemsState = [];
+let isSelectModeActive = false;
+
+function showPoList() {
+    document.getElementById('po_dropdown_list').style.display = 'block';
+    filterPoList(document.getElementById('po_search_input').value);
+}
+
+function filterPoList(query) {
+    const list = document.getElementById('po_dropdown_list');
+    const items = list.getElementsByClassName('po-option-item');
+    const q = query.toLowerCase().trim();
+
+    for (let item of items) {
+        const text = item.getAttribute('data-text').toLowerCase();
+        if (text.includes(q)) {
+            item.style.display = 'flex';
+        } else {
+            item.style.display = 'none';
+        }
+    }
+    list.style.display = 'block';
+}
+
+function selectPoOption(elem) {
+    const poId = elem.getAttribute('data-id');
+    const text = elem.getAttribute('data-text');
+    document.getElementById('po_search_input').value = text;
+    document.getElementById('selected_po_id').value = poId;
+    document.getElementById('po_dropdown_list').style.display = 'none';
+    loadPoDetails(poId);
+}
+
+document.addEventListener('click', function(e) {
+    const input = document.getElementById('po_search_input');
+    const list = document.getElementById('po_dropdown_list');
+    if (input && list && !input.contains(e.target) && !list.contains(e.target)) {
+        list.style.display = 'none';
+    }
+});
+
+function loadPoDetails(poId) {
+    if (!poId) {
+        document.getElementById('po_details_section').style.display = 'none';
+        document.getElementById('no_po_selected_notice').style.display = 'block';
+        return;
+    }
+
+    fetch('/api/po-items/' + poId)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('vendor_name_display').value = data.vendor_name || 'N/A';
+                document.getElementById('vendor_id_hidden').value = data.vendor_id || '';
+                
+                poItemsState = (data.items || []).map(item => ({
+                    item_id: item.item_id,
+                    item_code: item.item_code,
+                    item_desc: item.item_desc || '',
+                    qty_ordered: item.qty_ordered,
+                    unit: item.unit || '',
+                    qty_received: 0,
+                    remarks: '',
+                    is_received: true
+                }));
+                
+                isSelectModeActive = false;
+                renderTables();
+
+                document.getElementById('no_po_selected_notice').style.display = 'none';
+                document.getElementById('po_details_section').style.display = 'block';
+            } else {
+                alert('Error loading PO items: ' + (data.message || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Failed to load PO details');
+        });
+}
+
+function renderTables() {
+    // 1. Render Items Received Table
+    const recBody = document.getElementById('items-received-body');
+    const thCheckbox = document.getElementById('th_checkbox');
+    recBody.innerHTML = '';
+    
+    thCheckbox.style.display = isSelectModeActive ? 'table-cell' : 'none';
+    document.getElementById('btn_confirm_move').style.display = isSelectModeActive ? 'inline-block' : 'none';
+    document.getElementById('btn_toggle_not_received_mode').innerText = isSelectModeActive ? 'Cancel Selection' : '☑ Select Items Not Received';
+
+    const receivedItems = poItemsState.filter(item => item.is_received);
+
+    if (receivedItems.length > 0) {
+        receivedItems.forEach((item, idx) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                ${isSelectModeActive ? `<td style="text-align: center;"><input type="checkbox" class="item-not-rec-checkbox" data-id="${item.item_id}"></td>` : ''}
+                <td>${idx + 1}</td>
+                <td>
+                    <strong>${item.item_code}</strong>
+                    <input type="hidden" name="item_id[]" value="${item.item_id}">
+                </td>
+                <td>${item.item_desc || '—'}</td>
+                <td>${item.qty_ordered} ${item.unit || ''}</td>
+                <td>
+                    <input type="number" step="0.001" min="0" name="qty_received[]" class="input-field" value="${item.qty_received}" onchange="updateItemQty(${item.item_id}, this.value)" required style="width: 100%; font-weight: 600;">
+                </td>
+                <td>
+                    <input type="text" name="line_remarks[]" class="input-field" value="${item.remarks}" onchange="updateItemRemarks(${item.item_id}, this.value)" placeholder="Item notes..." style="width: 100%;">
+                </td>
+            `;
+            recBody.appendChild(tr);
+        });
+    } else {
+        recBody.innerHTML = '<tr><td colspan="' + (isSelectModeActive ? 7 : 6) + '" style="text-align:center; color:#888; padding:20px;">All items marked as not received.</td></tr>';
+    }
+
+    // 2. Render Items Not Received Table
+    const notRecBody = document.getElementById('not-received-body');
+    const notRecContainer = document.getElementById('not_received_container');
+    notRecBody.innerHTML = '';
+    
+    const notReceivedItems = poItemsState.filter(item => !item.is_received);
+
+    if (notReceivedItems.length > 0) {
+        notRecContainer.style.display = 'block';
+        document.getElementById('not_received_count_badge').innerText = notReceivedItems.length + (notReceivedItems.length === 1 ? ' item' : ' items');
+
+        notReceivedItems.forEach((item, idx) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${idx + 1}</td>
+                <td><strong>${item.item_code}</strong></td>
+                <td>${item.item_desc || '—'}</td>
+                <td>${item.qty_ordered} ${item.unit || ''}</td>
+                <td><span class="badge badge-cancelled" style="background:#fef3c7; color:#b45309; border:1px solid #fcd34d;">Not Received</span></td>
+                <td style="text-align: center;">
+                    <button type="button" onclick="moveBackToReceived(${item.item_id})" class="btn-outline" style="font-size: 11px; padding: 4px 10px; color: #1e40af; border-color: #93c5fd; font-weight: 600;">
+                        ↩ Move to Received
+                    </button>
+                </td>
+            `;
+            notRecBody.appendChild(tr);
+        });
+    } else {
+        notRecContainer.style.display = 'none';
+    }
+}
+
+function updateItemQty(itemId, val) {
+    const item = poItemsState.find(i => i.item_id === itemId);
+    if (item) item.qty_received = val;
+}
+
+function updateItemRemarks(itemId, val) {
+    const item = poItemsState.find(i => i.item_id === itemId);
+    if (item) item.remarks = val;
+}
+
+function toggleNotReceivedMode() {
+    isSelectModeActive = !isSelectModeActive;
+    renderTables();
+}
+
+function toggleSelectAll(masterCb) {
+    const checkboxes = document.querySelectorAll('.item-not-rec-checkbox');
+    checkboxes.forEach(cb => cb.checked = masterCb.checked);
+}
+
+function confirmMoveToNotReceived() {
+    const checkboxes = document.querySelectorAll('.item-not-rec-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one item using the checkbox to move to Not Received.');
+        return;
+    }
+    
+    checkboxes.forEach(cb => {
+        const id = parseInt(cb.getAttribute('data-id'));
+        const item = poItemsState.find(i => i.item_id === id);
+        if (item) {
+            item.is_received = false;
+        }
+    });
+
+    isSelectModeActive = false;
+    renderTables();
+}
+
+function moveBackToReceived(itemId) {
+    const item = poItemsState.find(i => i.item_id === itemId);
+    if (item) {
+        item.is_received = true;
+        renderTables();
+    }
+}
+</script>
+{% endblock %}

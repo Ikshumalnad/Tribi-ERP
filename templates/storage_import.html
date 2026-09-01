@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/storage">Storage</a> / Import
+</div>
+
+<div class="page-header" style="display: flex; justify-content: space-between; align-items: center;">
+    <h1>Import Storage Inventory</h1>
+    <div style="display: flex; gap: 8px;">
+        <a href="/storage/template" class="btn btn-secondary" style="font-weight: 600; text-decoration: none;">📥 Download Sample Template</a>
+        <a href="/storage" class="btn-outline">← Back</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card" style="max-width: 700px;">
+    <form method="post" action="/storage/import" enctype="multipart/form-data">
+        <div class="form-group" style="margin-bottom: 20px;">
+            <label style="font-weight: 600;">Select Excel or CSV File (.xlsx, .xls, .csv) <span class="required">*</span></label>
+            <input type="file" name="excel_file" accept=".xlsx, .xls, .csv, .tsv, .txt" class="input-field" required style="padding: 12px; border: 2px dashed #cbd5e1; border-radius: 8px; cursor: pointer; background: #fafafa;">
+            <div style="font-size: 12px; color: #64748b; margin-top: 6px;">
+                Upload a spreadsheet containing item inventory counts (.xlsx, .xls, or .csv formats supported).
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 24px;">
+            <label style="font-weight: 600;">Default Location <span class="required">*</span></label>
+            <input type="text" name="default_location" class="input-field" value="Main Store" required placeholder="e.g. Main Store, Rack A-1">
+            <div style="font-size: 12px; color: #64748b; margin-top: 6px;">
+                Used if a row does not specify a storage location in the file.
+            </div>
+        </div>
+
+        <div style="display:flex; gap:12px;">
+            <button type="submit" class="btn-primary" style="padding: 10px 24px; font-weight: 600;">📥 Start Import</button>
+            <a href="/storage" class="btn-outline" style="padding: 10px 20px; align-self: center;">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<div class="panel" style="margin-top: 28px; max-width: 700px; border-left: 4px solid #1a2e4a;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="color: #1a2e4a; text-transform: none; font-size: 14px; font-weight: 600; margin: 0;">📋 Supported Columns & Format Guidance</h3>
+        <a href="/storage/template" style="font-size: 12px; font-weight: 600; color: #2563eb; text-decoration: none;">Download Excel Sample (.xlsx)</a>
+    </div>
+    <p style="font-size: 13px; color: #475569; margin-bottom: 10px; line-height: 1.5;">
+        The importer automatically detects headers across the first 20 rows and supports all standard column aliases:
+    </p>
+    <ul style="font-size: 13px; color: #475569; padding-left: 20px; line-height: 1.8; margin-bottom: 12px;">
+        <li><strong>Item Code:</strong> <code>Item Code</code>, <code>Code</code>, <code>Item</code>, <code>Part Number</code>, <code>Part No</code>, <code>SKU</code>, <code>Material</code></li>
+        <li><strong>Quantity / Stock:</strong> <code>Physical Count</code>, <code>Qty</code>, <code>Quantity</code>, <code>Count</code>, <code>Stock</code>, <code>Available</code>, <code>Total Qty</code></li>
+        <li><strong>Location (Optional):</strong> <code>Location</code>, <code>Store Location</code>, <code>Bin</code>, <code>Rack</code>, <code>Warehouse</code> (falls back to Default Location)</li>
+        <li><strong>Description (Optional):</strong> <code>Description</code>, <code>Desc</code>, <code>Item Name</code> (auto-fills master if item is new)</li>
+        <li><strong>MPN & Manufacturer (Optional):</strong> <code>MPN</code>, <code>Manufacturer</code>, <code>Make</code>, <code>Brand</code></li>
+    </ul>
+    <p style="font-size: 12px; color: #16a34a; font-weight: 600;">
+        💡 Auto-Creation: If an item code does not exist in the master database yet, it will be automatically created without skipping any row!
+    </p>
+</div>
+{% endblock %}

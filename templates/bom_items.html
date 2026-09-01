@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>BOM: {{ bom.bom_code }}</h1>
+    <div style="display:flex; gap:8px;">
+        {% if wo %}
+        <a href="/work-order/{{ wo.wo_id }}" class="btn-outline">← Back to WO {{ wo.wo_number }}</a>
+        {% else %}
+        <a href="/work-order" class="btn-outline">← Work Orders</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if wo %}
+<div class="detail-card" style="margin-bottom:20px;">
+    <div class="detail-grid">
+        <div><span class="detail-label">Work Order</span> {{ wo.wo_number }}</div>
+        <div><span class="detail-label">Sets</span> {{ wo.qty_to_build }}</div>
+        <div><span class="detail-label">BOM Description</span> {{ bom.description or '—' }}</div>
+    </div>
+</div>
+{% endif %}
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div style="margin-bottom:16px; display:flex; gap:8px; align-items:center;">
+    <span style="font-size:13px; font-weight:600; color:#4a5568;">Search Items:</span>
+    <input type="text" id="bom-item-search" placeholder="Search by item code or description..." 
+           style="width:320px; padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); outline: none;">
+</div>
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Item Code</th>
+                <th>Description</th>
+                <th>MPN</th>
+                <th>Unit</th>
+                <th>BOM Qty</th>
+                <th>Required Qty</th>
+                <th>Available</th>
+                <th>Blocked (this WO)</th>
+                <th>Issued</th>
+                {% if wo %}<th>Action</th>{% endif %}
+            </tr>
+        </thead>
+        <tbody>
+        {% for item in bom_items %}
+        <tr class="bom-item-row">
+            <td><strong>{{ item.item_code }}</strong></td>
+            <td>{{ item.item_desc }}</td>
+            <td>{{ item.mpn or '—' }}</td>
+            <td>{{ item.unit or '—' }}</td>
+            <td>{{ item.bom_qty }}</td>
+            <td>{{ item.qty_required if wo else '—' }}</td>
+            <td>{{ item.available }}</td>
+            <td>{{ item.wo_blocked if wo else '—' }}</td>
+            <td>{{ item.qty_issued if wo else '—' }}</td>
+            {% if wo %}
+            <td>
+                <button class="btn-primary btn-sm"
+                        data-itemid="{{ item.item_id }}"
+                        data-itemcode="{{ item.item_code }}"
+                        data-qtyrequired="{{ item.qty_required }}"
+                        data-woblocked="{{ item.wo_blocked }}"
+                        data-available="{{ item.available }}"
+                        data-bomid="{{ bom.bom_id }}"
+                        onclick="openIssueDialog(this)">
+                    Issue
+                </button>
+            </td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Issue Dialog -->
+<div id="issue-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:12px; padding:32px; width:460px; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+        <h3 style="margin:0 0 20px;">Issue Stock</h3>
+        <div id="issue-summary" style="background:#f8f9fa; border-radius:8px; padding:16px; margin-bottom:20px; font-size:14px; line-height:2;"></div>
+        <form method="post" action="/work-order/{{ wo_id }}/issue">
+            <input type="hidden" name="item_id" id="issue-item-id">
+            <input type="hidden" name="qty_to_issue" id="issue-qty-hidden">
+            <input type="hidden" name="bom_id" value="{{ bom.bom_id }}">
+            <div class="form-group">
+                <label>Remarks</label>
+                <input type="text" name="remarks" class="input-field" placeholder="Optional">
+            </div>
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button type="submit" class="btn-primary">Confirm Issue</button>
+                <button type="button" class="btn-outline" onclick="closeIssueDialog()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openIssueDialog(btn) {
+    const itemId    = btn.dataset.itemid;
+    const itemCode  = btn.dataset.itemcode;
+    const qtyReq    = parseFloat(btn.dataset.qtyrequired);
+    const woBlocked = parseFloat(btn.dataset.woblocked);
+    const available = parseFloat(btn.dataset.available);
+
+    document.getElementById('issue-item-id').value    = itemId;
+    document.getElementById('issue-qty-hidden').value = qtyReq;
+
+    const afterRelease = available + woBlocked;
+    const afterIssue   = afterRelease - qtyReq;
+
+    document.getElementById('issue-summary').innerHTML =
+        '<strong>Item:</strong> ' + itemCode + '<br>' +
+        '<strong>Available in stock:</strong> ' + available + '<br>' +
+        '<strong>Blocked for this WO:</strong> ' + woBlocked + ' (will be released)<br>' +
+        '<strong>Stock after release:</strong> ' + afterRelease + '<br>' +
+        '<strong>Issuing:</strong> ' + qtyReq + '<br>' +
+        '<strong style="color:#27ae60;">Stock after issue: ' + afterIssue + '</strong>';
+
+    document.getElementById('issue-modal').style.display = 'flex';
+}
+
+function closeIssueDialog() {
+    document.getElementById('issue-modal').style.display = 'none';
+}
+
+document.getElementById('bom-item-search').addEventListener('input', function() {
+    const query = this.value.toLowerCase().trim();
+    const rows = document.querySelectorAll('.bom-item-row');
+    
+    rows.forEach(row => {
+        const codeText = row.cells[0].textContent.toLowerCase();
+        const descText = row.cells[1].textContent.toLowerCase();
+        
+        if (codeText.includes(query) || descText.includes(query)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+});
+</script>
+{% endblock %}

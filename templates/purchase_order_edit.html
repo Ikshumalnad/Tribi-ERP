@@ -1,0 +1,787 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/purchase-order">Purchase orders</a> / <a href="/purchase-order/{{ po.po_id }}">{{ po.formatted_po_number }}</a> / Edit
+</div>
+
+<div class="page-header">
+    <h1>Edit Purchase Order: {{ po.formatted_po_number }}</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('work-order')">📋 Refer to Work Orders</button>
+        <a href="/purchase-order/{{ po.po_id }}" class="btn btn-secondary">← View Details</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card" style="max-width: 900px; margin-bottom: 40px;">
+    <form method="post" action="/purchase-order/{{ po.po_id }}/edit">
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+            Primary Purchase Order Details
+        </h3>
+        
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+            <div class="form-group">
+                <label>PO Number</label>
+                <input type="text" value="{{ po.formatted_po_number }}" disabled style="background:#f4f6f9; color:#888;">
+            </div>
+
+            <div class="form-group">
+                <label>Vendor <span style="color:red;">*</span></label>
+                <select name="vendor_id" required onchange="onVendorChange()">
+                    {% for vendor in vendors %}
+                    <option value="{{ vendor.vendor_id }}" {% if vendor.vendor_id == po.vendor_id %}selected{% endif %}>
+                        {{ vendor.short_name }} — {{ vendor.full_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Date Raised <span style="color:red;">*</span></label>
+                <input type="date" name="date_raised" value="{{ po.date_raised }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Currency <span style="color:red;">*</span></label>
+                <select name="currency" required id="currencySelect" onchange="updateCurrencySymbols()">
+                    <option value="INR" {% if po.currency == 'INR' or not po.currency %}selected{% endif %}>INR (₹)</option>
+                    <option value="USD" {% if po.currency == 'USD' %}selected{% endif %}>USD ($)</option>
+                    <option value="EUR" {% if po.currency == 'EUR' %}selected{% endif %}>EUR (€)</option>
+                    <option value="GBP" {% if po.currency == 'GBP' %}selected{% endif %}>GBP (£)</option>
+                </select>
+            </div>
+
+            {% if is_amend %}
+            <div class="form-group">
+                <label>PO Status <span style="color:red;">*</span></label>
+                <select name="po_status" required id="poStatusSelect" onchange="toggleStatusSections()">
+                    <option value="Draft" {% if po.po_status == 'Draft' %}selected{% endif %}>Draft</option>
+                    <option value="Open" {% if po.po_status == 'Open' %}selected{% endif %}>Open</option>
+                    <option value="Reviewed" {% if po.po_status == 'Reviewed' %}selected{% endif %}>Reviewed</option>
+                    <option value="Approved" {% if po.po_status == 'Approved' %}selected{% endif %}>Approved</option>
+                    <option value="Closed" {% if po.po_status == 'Closed' %}selected{% endif %}>Closed</option>
+                    <option value="Cancelled" {% if po.po_status == 'Cancelled' %}selected{% endif %}>Cancelled</option>
+                </select>
+            </div>
+            {% else %}
+            <input type="hidden" name="po_status" value="Draft">
+            {% endif %}
+        </div>
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+            Purchase Order Items
+            <button type="button" class="btn btn-success" style="font-size: 12px; padding: 4px 10px;" onclick="addItemRow()">+ Add Item</button>
+        </h3>
+
+        <div style="margin-bottom: 24px; overflow: visible;">
+            <table class="data-table" id="itemsTable">
+                <thead>
+                    <tr>
+                        <th style="width: 45%;">Item <span style="color:red;">*</span></th>
+                        <th style="width: 20%;">Qty <span style="color:red;">*</span></th>
+                        <th style="width: 20%;">Unit Price <span style="color:red;">*</span></th>
+                        <th style="width: 15%;">Unit <span style="color:red;">*</span></th>
+                        <th style="width: 40px;"></th>
+                    </tr>
+                </thead>
+                <tbody id="itemsTableBody">
+                    <!-- Javascript will insert rows here -->
+                </tbody>
+            </table>
+        </div>
+
+        {% if is_amend %}
+        <!-- Review & Approval Information Section -->
+        <div id="reviewApprovalSection">
+            <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+                Review & Approval Information
+            </h3>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+                <div class="form-group">
+                    <label>Reviewed Date</label>
+                    <input type="date" name="reviewed_date" value="{{ po.reviewed_date or '' }}">
+                </div>
+                <div class="form-group">
+                    <label>Reviewed By</label>
+                    <input type="text" name="reviewed_by" value="{{ po.reviewed_by or '' }}" placeholder="Reviewer name">
+                </div>
+                <div class="form-group">
+                    <label>Approved Date</label>
+                    <input type="date" name="approved_date" value="{{ po.approved_date or '' }}">
+                </div>
+                <div class="form-group">
+                    <label>Approved By</label>
+                    <input type="text" name="approved_by" value="{{ po.approved_by or '' }}" placeholder="Approver name">
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if is_amend %}
+        <!-- Cancellation Section -->
+        <div id="cancellationSection" style="display: none;">
+            <h3 style="font-size: 15px; font-weight: 600; color: #d9534f; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #d9534f; padding-bottom: 6px;">
+                Cancellation Details
+            </h3>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+                <div class="form-group">
+                    <label>Cancelled By</label>
+                    <input type="text" name="cancelled_by" value="{{ po.cancelled_by or '' }}" placeholder="Who cancelled this PO">
+                </div>
+                <div class="form-group">
+                    <label>Cancel Type</label>
+                    <input type="text" name="cancel_type" value="{{ po.cancel_type or '' }}" placeholder="e.g. Vendor Issue, Project Delayed">
+                </div>
+                <div class="form-group">
+                    <label>Cancelled Date</label>
+                    <input type="datetime-local" name="cancelled_at" value="{{ po.cancelled_at.strftime('%Y-%m-%dT%H:%M') if po.cancelled_at else '' }}">
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+            Terms & Conditions & Payment Terms
+        </h3>
+
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+            <!-- Terms & Conditions -->
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                    <input type="checkbox" id="modifyTermsCheckboxEdit" onchange="toggleTermsEditPage()" {% if po.custom_terms %}checked{% endif %}>
+                    Modify terms and conditions
+                </label>
+                <div id="termsContainerEdit" style="display: {% if po.custom_terms %}block{% else %}none{% endif %}; margin-top: 10px;">
+                    <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Custom Terms (one per line):</label>
+                    <textarea name="custom_terms" id="customTermsTextareaEdit" rows="6" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; font-family: sans-serif; resize: vertical; box-sizing: border-box;">{{ po.custom_terms or '' }}</textarea>
+                </div>
+            </div>
+
+            <!-- Payment Terms -->
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                    <input type="checkbox" id="modifyPaymentTermsCheckboxEdit" onchange="togglePaymentTermsEditPage()" {% if po.payment_terms %}checked{% endif %}>
+                    Modify payment terms
+                </label>
+                <div id="paymentTermsContainerEdit" style="display: {% if po.payment_terms %}flex{% else %}none{% endif %}; margin-top: 10px; flex-direction: column; gap: 10px;">
+                    <div>
+                        <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Select Option:</label>
+                        <select id="paymentTermsSelectEdit" onchange="handlePaymentOptionChangeEdit()" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; background: #fff;">
+                            <option value="within">Within __ days</option>
+                            <option value="after">after receiving items</option>
+                            <option value="custom">custom payment terms</option>
+                        </select>
+                    </div>
+
+                    <div id="paymentDaysContainerEdit" style="display: block;">
+                        <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Number of Days:</label>
+                        <input type="number" id="paymentDaysInputEdit" min="0" value="30" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; box-sizing: border-box;" oninput="updatePaymentTermsHiddenEdit()">
+                    </div>
+
+                    <div id="customPaymentTermsContainerEdit" style="display: none;">
+                        <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Custom Payment Terms:</label>
+                        <input type="text" id="customPaymentTermsInputEdit" placeholder="e.g. 50% Advance, 50% on Delivery" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; box-sizing: border-box;" oninput="updatePaymentTermsHiddenEdit()">
+                    </div>
+
+                    <input type="hidden" name="payment_terms" id="paymentTermsHiddenEdit" value="{{ po.payment_terms or '' }}">
+                </div>
+            </div>
+        </div>
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+            Additional Notes
+        </h3>
+
+        <div class="form-group">
+            <label>Remarks</label>
+            <textarea name="remarks" rows="3" placeholder="Enter any extra comments or remarks...">{{ po.remarks or '' }}</textarea>
+        </div>
+
+        <div class="form-actions" style="display: flex; gap: 12px; margin-top: 24px;">
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <a href="/purchase-order/{{ po.po_id }}" class="btn btn-secondary">Cancel</a>
+        </div>
+
+    </form>
+</div>
+
+<script>
+const defaultTermsText = "Subject to Bangalore Jurisdiction\nPurchase Order No. should be mentioned in all the supporting documents along with the supply of material\nTribi Item Code should be mentioned in all the supporting documents along with the supply of material";
+const savedPoPaymentTerms = {{ (po.payment_terms or '') | tojson }};
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (savedPoPaymentTerms) {
+        if (savedPoPaymentTerms.startsWith("Within ") && savedPoPaymentTerms.endsWith(" days")) {
+            document.getElementById('paymentTermsSelectEdit').value = "within";
+            document.getElementById('paymentDaysInputEdit').value = savedPoPaymentTerms.replace("Within ", "").replace(" days", "");
+        } else if (savedPoPaymentTerms === "after receiving items") {
+            document.getElementById('paymentTermsSelectEdit').value = "after";
+        } else {
+            document.getElementById('paymentTermsSelectEdit').value = "custom";
+            document.getElementById('customPaymentTermsInputEdit').value = savedPoPaymentTerms;
+        }
+        handlePaymentOptionChangeEdit();
+    }
+});
+
+function toggleTermsEditPage() {
+    const isChecked = document.getElementById('modifyTermsCheckboxEdit').checked;
+    document.getElementById('termsContainerEdit').style.display = isChecked ? 'block' : 'none';
+    if (isChecked && !document.getElementById('customTermsTextareaEdit').value) {
+        document.getElementById('customTermsTextareaEdit').value = defaultTermsText;
+    }
+}
+
+function togglePaymentTermsEditPage() {
+    const isChecked = document.getElementById('modifyPaymentTermsCheckboxEdit').checked;
+    document.getElementById('paymentTermsContainerEdit').style.display = isChecked ? 'flex' : 'none';
+    updatePaymentTermsHiddenEdit();
+}
+
+function handlePaymentOptionChangeEdit() {
+    const opt = document.getElementById('paymentTermsSelectEdit').value;
+    document.getElementById('paymentDaysContainerEdit').style.display = (opt === 'within') ? 'block' : 'none';
+    document.getElementById('customPaymentTermsContainerEdit').style.display = (opt === 'custom') ? 'block' : 'none';
+    updatePaymentTermsHiddenEdit();
+}
+
+function updatePaymentTermsHiddenEdit() {
+    const isChecked = document.getElementById('modifyPaymentTermsCheckboxEdit').checked;
+    if (!isChecked) {
+        document.getElementById('paymentTermsHiddenEdit').value = "";
+        return;
+    }
+    const opt = document.getElementById('paymentTermsSelectEdit').value;
+    if (opt === 'within') {
+        const days = document.getElementById('paymentDaysInputEdit').value || "0";
+        document.getElementById('paymentTermsHiddenEdit').value = "Within " + days + " days";
+    } else if (opt === 'after') {
+        document.getElementById('paymentTermsHiddenEdit').value = "after receiving items";
+    } else if (opt === 'custom') {
+        document.getElementById('paymentTermsHiddenEdit').value = document.getElementById('customPaymentTermsInputEdit').value || "";
+    }
+}
+</script>
+
+<style>
+.searchable-select-wrapper {
+    position: relative;
+    width: 100%;
+}
+.searchable-select-input {
+    background-color: #fff;
+    cursor: pointer;
+}
+.searchable-select-dropdown {
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    max-height: 200px;
+    overflow-y: auto;
+    border-radius: 6px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+}
+.searchable-select-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+}
+.searchable-select-item:hover {
+    background-color: #f1f5f9;
+}
+.searchable-select-nomatch {
+    padding: 8px 12px;
+    color: #94a3b8;
+    font-size: 13px;
+}
+#itemsTable, #itemsTable td {
+    overflow: visible !important;
+}
+</style>
+
+<script>
+const allItems = {{ items | tojson }};
+const allVendors = {{ vendors | tojson }};
+const vendorItemsData = {{ vendor_items | tojson }};
+const unitsData = {{ units | tojson }};
+
+// Map item_id to vendors who supply it
+const itemVendorsData = {};
+allVendors.forEach(vendor => {
+    const vId = vendor.vendor_id;
+    if (vendorItemsData[vId]) {
+        vendorItemsData[vId].forEach(item => {
+            if (!itemVendorsData[item.item_id]) {
+                itemVendorsData[item.item_id] = [];
+            }
+            itemVendorsData[item.item_id].push({
+                vendor_id: vendor.vendor_id,
+                short_name: vendor.short_name,
+                full_name: vendor.full_name
+            });
+        });
+    }
+});
+
+function restoreAllVendors() {
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    if (!vendorSelect) return;
+    
+    const currentVal = vendorSelect.value;
+    
+    let options = '<option value="">— Select Vendor —</option>';
+    allVendors.forEach(vendor => {
+        const selected = vendor.vendor_id == currentVal ? 'selected' : '';
+        options += `<option value="${vendor.vendor_id}" ${selected}>${vendor.short_name} — ${vendor.full_name}</option>`;
+    });
+    vendorSelect.innerHTML = options;
+    vendorSelect.dispatchEvent(new Event('refreshCustomSelect'));
+}
+
+function updateVendorDropdownOptions(commonVendorIds) {
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    if (!vendorSelect) return;
+    
+    const currentVal = vendorSelect.value;
+    
+    let options = '<option value="">— Select Vendor —</option>';
+    allVendors.forEach(vendor => {
+        if (commonVendorIds.has(parseInt(vendor.vendor_id))) {
+            const selected = vendor.vendor_id == currentVal ? 'selected' : '';
+            options += `<option value="${vendor.vendor_id}" ${selected}>${vendor.short_name} — ${vendor.full_name}</option>`;
+        }
+    });
+    vendorSelect.innerHTML = options;
+    vendorSelect.dispatchEvent(new Event('refreshCustomSelect'));
+}
+
+function validateAndRecalculate(changedSelect) {
+    const itemSelects = Array.from(document.querySelectorAll('select[name="item_id[]"]'));
+    const selectedItems = itemSelects.map(s => s.value).filter(val => val !== "");
+    
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    if (!vendorSelect) return true;
+    
+    const currentVendorId = vendorSelect.value;
+    
+    // If no items selected, restore all vendor options
+    if (selectedItems.length === 0) {
+        restoreAllVendors();
+        return true;
+    }
+    
+    // Compute intersection of vendors for selected items
+    let commonVendorIds = null;
+    let anyItemHasVendors = false;
+    for (let i = 0; i < selectedItems.length; i++) {
+        const itemId = selectedItems[i];
+        const itemVendors = itemVendorsData[itemId] || [];
+        if (itemVendors.length > 0) {
+            anyItemHasVendors = true;
+            const vIds = itemVendors.map(v => parseInt(v.vendor_id));
+            
+            if (commonVendorIds === null) {
+                commonVendorIds = new Set(vIds);
+            } else {
+                commonVendorIds = new Set([...commonVendorIds].filter(x => vIds.includes(x)));
+            }
+        }
+    }
+    
+    if (!anyItemHasVendors) {
+        commonVendorIds = new Set(allVendors.map(v => parseInt(v.vendor_id)));
+    }
+    
+    // If current vendor is already selected, check if it's in the intersection
+    if (currentVendorId !== "") {
+        if (!commonVendorIds.has(parseInt(currentVendorId))) {
+            alert("You cannot select items from multiple vendors in the same Purchase Order. Please create a new Purchase Order instead.");
+            if (changedSelect) {
+                changedSelect.value = "";
+                changedSelect.dispatchEvent(new Event('refreshCustomSelect'));
+            }
+            return false;
+        }
+    } else {
+        // If no vendor selected, but intersection is empty
+        if (commonVendorIds.size === 0) {
+            alert("You cannot select items from multiple vendors in the same Purchase Order. Please create a new Purchase Order instead.");
+            if (changedSelect) {
+                changedSelect.value = "";
+                changedSelect.dispatchEvent(new Event('refreshCustomSelect'));
+            }
+            return false;
+        }
+    }
+    
+    // Update vendor dropdown options
+    updateVendorDropdownOptions(commonVendorIds);
+    
+    // Auto-select vendor if intersection has size 1 and no vendor is selected
+    if (vendorSelect.value === "" && commonVendorIds.size === 1) {
+        const singleVendorId = [...commonVendorIds][0];
+        vendorSelect.value = singleVendorId;
+        vendorSelect.dispatchEvent(new Event('refreshCustomSelect'));
+        onVendorChange();
+    }
+    
+    return true;
+}
+
+// Custom Searchable Dropdown Component
+function initSearchableSelect(selectEl, placeholder = "Search...") {
+    if (selectEl.dataset.searchableInitialized) {
+        selectEl.dispatchEvent(new Event('refreshCustomSelect'));
+        return;
+    }
+    selectEl.dataset.searchableInitialized = "true";
+    
+    // Create wrapper
+    const wrapper = document.createElement('div');
+    wrapper.className = 'searchable-select-wrapper';
+    wrapper.style.position = 'relative';
+    wrapper.style.width = '100%';
+    
+    // Hide original select
+    selectEl.style.display = 'none';
+    selectEl.parentNode.insertBefore(wrapper, selectEl);
+    wrapper.appendChild(selectEl);
+    
+    // Create input
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'searchable-select-input';
+    input.placeholder = placeholder;
+    input.autocomplete = 'off';
+    input.required = selectEl.required;
+    input.style.width = '100%';
+    input.style.padding = '8px 12px';
+    input.style.border = '1px solid #cbd5e1';
+    input.style.borderRadius = '6px';
+    input.style.fontSize = '14px';
+    input.style.boxSizing = 'border-box';
+    wrapper.appendChild(input);
+    
+    // Create dropdown container
+    const dropdown = document.createElement('div');
+    dropdown.className = 'searchable-select-dropdown';
+    dropdown.style.position = 'absolute';
+    dropdown.style.top = '100%';
+    dropdown.style.left = '0';
+    dropdown.style.width = '100%';
+    dropdown.style.maxHeight = '200px';
+    dropdown.style.overflowY = 'auto';
+    dropdown.style.background = '#ffffff';
+    dropdown.style.border = '1px solid #cbd5e1';
+    dropdown.style.borderRadius = '6px';
+    dropdown.style.marginTop = '4px';
+    dropdown.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.1)';
+    dropdown.style.zIndex = '1000';
+    dropdown.style.display = 'none';
+    wrapper.appendChild(dropdown);
+    
+    // Function to populate/refresh dropdown options
+    function refreshOptions() {
+        dropdown.innerHTML = '';
+        const options = Array.from(selectEl.options);
+        
+        options.forEach(opt => {
+            if (opt.value === "") return;
+            const item = document.createElement('div');
+            item.className = 'searchable-select-item';
+            item.innerText = opt.text;
+            item.dataset.value = opt.value;
+            item.style.padding = '8px 12px';
+            item.style.cursor = 'pointer';
+            item.style.fontSize = '13px';
+            item.style.transition = 'background 0.2s';
+            
+            item.addEventListener('mouseenter', () => {
+                item.style.background = '#f1f5f9';
+            });
+            item.addEventListener('mouseleave', () => {
+                item.style.background = 'transparent';
+            });
+            
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectEl.value = opt.value;
+                input.value = opt.text;
+                dropdown.style.display = 'none';
+                
+                selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                if (typeof selectEl.onchange === 'function') {
+                    selectEl.onchange();
+                }
+            });
+            
+            dropdown.appendChild(item);
+        });
+        
+        const activeOpt = selectEl.options[selectEl.selectedIndex];
+        if (activeOpt && activeOpt.value !== "") {
+            input.value = activeOpt.text;
+        } else {
+            input.value = '';
+        }
+    }
+    
+    refreshOptions();
+    
+    selectEl.addEventListener('refreshCustomSelect', () => {
+        refreshOptions();
+    });
+    
+    input.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.searchable-select-dropdown').forEach(d => {
+            if (d !== dropdown) d.style.display = 'none';
+        });
+        const opening = dropdown.style.display === 'none';
+        dropdown.style.display = opening ? 'block' : 'none';
+        
+        if (opening) {
+            // Show all items initially on click to allow changing selection easily
+            filterItems("");
+            input.select();
+        }
+    });
+    
+    function filterItems(searchText) {
+        const items = dropdown.querySelectorAll('.searchable-select-item');
+        const search = searchText.toLowerCase();
+        let visibleCount = 0;
+        
+        items.forEach(item => {
+            const text = item.innerText.toLowerCase();
+            if (text.includes(search)) {
+                item.style.display = 'block';
+                visibleCount++;
+            } else {
+                item.style.display = 'none';
+            }
+        });
+        
+        if (visibleCount === 0 && search !== "") {
+            let noMatch = dropdown.querySelector('.searchable-select-nomatch');
+            if (!noMatch) {
+                noMatch = document.createElement('div');
+                noMatch.className = 'searchable-select-nomatch';
+                noMatch.innerText = 'No matches found';
+                noMatch.style.padding = '8px 12px';
+                noMatch.style.color = '#94a3b8';
+                noMatch.style.fontSize = '13px';
+                dropdown.appendChild(noMatch);
+            }
+        } else {
+            const noMatch = dropdown.querySelector('.searchable-select-nomatch');
+            if (noMatch) noMatch.remove();
+        }
+    }
+    
+    input.addEventListener('input', () => {
+        dropdown.style.display = 'block';
+        filterItems(input.value);
+    });
+    
+    document.addEventListener('click', () => {
+        dropdown.style.display = 'none';
+        const activeOpt = selectEl.options[selectEl.selectedIndex];
+        if (activeOpt && activeOpt.value !== "") {
+            input.value = activeOpt.text;
+        } else {
+            input.value = '';
+        }
+    });
+}
+
+function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
+    const tbody = document.getElementById('itemsTableBody');
+    const rowId = 'row-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+    
+    const tr = document.createElement('tr');
+    tr.id = rowId;
+    
+    // Always include all items in the item dropdown
+    let itemOptions = '<option value="">— Select Item —</option>';
+    allItems.forEach(item => {
+        const selected = item.item_id == itemId ? 'selected' : '';
+        itemOptions += `<option value="${item.item_id}" ${selected} data-unit-id="${item.unit_id}">${item.item_code} — ${item.desc || ''}</option>`;
+    });
+    
+    // Unit select options
+    let unitOptions = '<option value="">— Select Unit —</option>';
+    unitsData.forEach(unit => {
+        const selected = unit.unit_id == unitId ? 'selected' : '';
+        unitOptions += `<option value="${unit.unit_id}" ${selected}>${unit.unit_short_name}</option>`;
+    });
+    
+    const currencySelect = document.getElementById('currencySelect');
+    const currentCurrency = currencySelect ? currencySelect.value : 'INR';
+    const currencySymbols = {
+        'INR': '₹',
+        'USD': '$',
+        'EUR': '€',
+        'GBP': '£'
+    };
+    const symbol = currencySymbols[currentCurrency] || '₹';
+
+    tr.innerHTML = `
+        <td>
+            <select name="item_id[]" required style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;" onchange="onItemChange(this)">
+                ${itemOptions}
+            </select>
+        </td>
+        <td>
+            <input type="number" name="qty_ordered[]" step="0.001" min="0.001" required value="${qty}" placeholder="0.000" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+        </td>
+        <td>
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <span class="currency-symbol" style="font-weight: bold; color: #4a5568;">${symbol}</span>
+                <input type="number" name="unit_price[]" step="0.001" min="0.000" required value="${price}" placeholder="0.000" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+            </div>
+        </td>
+        <td>
+            <select name="unit_id[]" required style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                ${unitOptions}
+            </select>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn btn-danger" style="padding: 4px 10px; font-size: 14px; font-weight: 600;" onclick="removeRow('${rowId}')">&times;</button>
+        </td>
+    `;
+    
+    tbody.appendChild(tr);
+    
+    const itemSelect = tr.querySelector('select[name="item_id[]"]');
+    initSearchableSelect(itemSelect, "Search Item...");
+}
+
+function updateCurrencySymbols() {
+    const select = document.getElementById('currencySelect');
+    if (!select) return;
+    const currency = select.value;
+    const currencySymbols = {
+        'INR': '₹',
+        'USD': '$',
+        'EUR': '€',
+        'GBP': '£'
+    };
+    const symbol = currencySymbols[currency] || '₹';
+    document.querySelectorAll('.currency-symbol').forEach(span => {
+        span.innerText = symbol;
+    });
+}
+
+function onItemChange(selectElement) {
+    const itemId = selectElement.value;
+    if (!itemId) return;
+    
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    const vendorId = vendorSelect ? vendorSelect.value : '';
+    const row = selectElement.closest('tr');
+    
+    if (vendorId) {
+        fetch(`/purchase-order/get-vendor-pricing?vendor_id=${vendorId}&item_id=${itemId}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    if (data.qty !== null && data.qty !== undefined && data.qty > 0) {
+                        const qtyInput = row.querySelector('input[name="qty_ordered[]"]');
+                        if (qtyInput && !qtyInput.value) qtyInput.value = data.qty;
+                    }
+                    if (data.price !== null && data.price !== undefined) {
+                        const priceInput = row.querySelector('input[name="unit_price[]"]');
+                        if (priceInput) priceInput.value = data.price;
+                    }
+                    if (data.unit_id) {
+                        const unitSelect = row.querySelector('select[name="unit_id[]"]');
+                        if (unitSelect) unitSelect.value = data.unit_id;
+                    }
+                } else {
+                    fallbackToDefaultUnit(selectElement);
+                }
+            })
+            .catch(err => {
+                console.error("Error fetching pricing:", err);
+                fallbackToDefaultUnit(selectElement);
+            });
+    } else {
+        fallbackToDefaultUnit(selectElement);
+    }
+}
+
+function fallbackToDefaultUnit(selectElement) {
+    const selectedOption = selectElement.options[selectElement.selectedIndex];
+    if (!selectedOption) return;
+    const unitId = selectedOption.getAttribute('data-unit-id');
+    if (unitId) {
+        const row = selectElement.closest('tr');
+        const unitSelect = row.querySelector('select[name="unit_id[]"]');
+        if (unitSelect && (!unitSelect.value || unitSelect.value === '')) {
+            unitSelect.value = unitId;
+        }
+    }
+}
+
+function onVendorChange() {
+    const itemSelects = document.querySelectorAll('select[name="item_id[]"]');
+    itemSelects.forEach(select => {
+        if (select.value !== "") {
+            onItemChange(select);
+        }
+    });
+}
+
+// Intercept iframe navigation for read-only modes
+if (window.location.search.includes('reference=1')) {
+    document.documentElement.classList.add('in-reference-mode');
+}
+
+function removeRow(rowId) {
+    const row = document.getElementById(rowId);
+    if (row) {
+        row.remove();
+        validateAndRecalculate();
+    }
+}
+
+function toggleStatusSections() {
+    const select = document.getElementById('poStatusSelect');
+    if (!select) return;
+    const status = select.value;
+    const cancellation = document.getElementById('cancellationSection');
+    
+    if (status === 'Cancelled') {
+        cancellation.style.display = 'block';
+    } else {
+        cancellation.style.display = 'none';
+    }
+}
+
+// On load, populate existing items
+document.addEventListener('DOMContentLoaded', () => {
+    toggleStatusSections();
+    
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    if (vendorSelect) {
+        initSearchableSelect(vendorSelect, "Search Vendor...");
+    }
+    
+    {% if po_items %}
+        {% for item in po_items %}
+            addItemRow({{ item.item_id }}, {{ item.qty_ordered }}, {{ item.unit_price }}, {{ item.unit_id }});
+        {% endfor %}
+    {% else %}
+        addItemRow();
+    {% endif %}
+});
+</script>
+{% endblock %}

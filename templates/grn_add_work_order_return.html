@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header" style="max-width: 1100px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center;">
+    <h1>{% if is_convert %}Modify GRN Type — {{ grn_no }}{% else %}New Work Order Return GRN — {{ grn_no }}{% endif %}</h1>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="{% if is_convert %}/grn{% else %}/grn/add{% endif %}" class="btn-outline">← Back</a>
+    </div>
+</div>
+
+<div class="form-card" style="max-width: 1100px; width: 100%; margin: 0 auto; padding: 32px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); box-sizing: border-box;">
+    <form method="post" action="{% if is_convert %}/grn/{{ grn.grn_id }}/convert{% else %}/grn/add/work-order-return{% endif %}" id="woReturnForm">
+        <input type="hidden" name="grn_no" value="{{ grn_no }}">
+        {% if is_convert %}
+        <input type="hidden" name="target_type" value="{{ target_type }}">
+        {% endif %}
+
+        <!-- 1. Work Order Selection Box -->
+        <div style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 22px; border-radius: 10px; margin-bottom: 24px; position: relative;">
+            <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 16px; color: #1a2e4a; font-weight: 700;">1. Work Order Selection</h3>
+            
+            <div class="form-group" style="margin-bottom: 0;">
+                <label style="font-size: 13px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">
+                    Select Work Order Number <span style="color:red;">*</span>
+                </label>
+                <select id="wo_select_dropdown" name="wo_id_ref" class="input-field" required onchange="loadWoBomDetails(this.value)" style="width: 100%; font-size: 14px; padding: 10px 12px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px;">
+                    <option value="">— Search or Select Work Order —</option>
+                    {% for wo in work_orders %}
+                    <option value="{{ wo.wo_id }}" 
+                            data-bomcode="{{ wo.bom_code or '' }}" 
+                            data-bomdesc="{{ wo.bom_desc or wo.wo_description or '' }}"
+                            {% if grn and grn.wo_id == wo.wo_id %}selected{% endif %}>
+                        WO #{{ wo.wo_number }} — {{ wo.bom_code or 'No BOM' }} ({{ wo.bom_desc or wo.wo_description or 'No Description' }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- 2. Section Details & BOM Item Return (Shown on selecting WO) -->
+        <div id="wo_details_section" style="display: none; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 16px; color: #1a2e4a; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">2. Return Details & BOM Item Manifest</h3>
+
+            <div class="form-grid" style="margin-bottom: 24px;">
+                <div class="form-group">
+                    <label style="font-weight: 600;">Invoice / Reference Number <span style="color:red;">*</span></label>
+                    <input type="text" name="invoice_no" id="invoice_no" class="input-field" value="{{ grn.invoice_no if is_convert and grn else '' }}" placeholder="e.g. WO-RET-2026-001" required>
+                </div>
+                <div class="form-group">
+                    <label style="font-weight: 600;">Return Date <span style="color:red;">*</span></label>
+                    <input type="date" name="invoice_date" id="invoice_date" class="input-field" value="{{ grn.invoice_date if is_convert and grn and grn.invoice_date else today }}" required>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label style="font-weight: 600;">Project Details</label>
+                    <input type="text" name="project_details" id="project_details" class="input-field" placeholder="Enter project name or details">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label style="font-weight: 600;">Header Remarks</label>
+                    <input type="text" name="remarks" class="input-field" value="{{ grn.remarks if is_convert and grn else '' }}" placeholder="Optional return comments or reason">
+                </div>
+            </div>
+
+            <!-- Single Item Return (BOM Code & Description) Table -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+                <h3 style="margin: 0; font-size: 16px; color: #1a2e4a; font-weight: 700;">Returned Assembly (BOM Item)</h3>
+                <span style="font-size: 12px; color: #1d4ed8; font-weight: 600; background: #eff6ff; padding: 4px 10px; border-radius: 6px; border: 1px solid #bfdbfe;">
+                    BOM Assembly Return
+                </span>
+            </div>
+
+            <div style="border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; margin-bottom: 24px;">
+                <table class="data-table" style="margin: 0; width: 100%;">
+                    <thead>
+                        <tr style="background: #f8fafc;">
+                            <th style="width: 50px;">#</th>
+                            <th style="min-width: 180px;">Item Code (BOM Code)</th>
+                            <th style="min-width: 250px;">Item Description (BOM Desc)</th>
+                            <th style="width: 180px;">Qty Received <span style="color:red;">*</span></th>
+                            <th style="min-width: 200px;">Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>1</td>
+                            <td>
+                                <input type="hidden" name="bom_code" id="hidden_bom_code" value="">
+                                <strong id="display_bom_code" style="color: #0f172a; font-size: 14px;">—</strong>
+                            </td>
+                            <td>
+                                <input type="hidden" name="bom_desc" id="hidden_bom_desc" value="">
+                                <span id="display_bom_desc" style="color: #334155;">—</span>
+                            </td>
+                            <td>
+                                <input type="number" 
+                                       name="qty_received" 
+                                       id="input_qty_received" 
+                                       step="any" 
+                                       min="0" 
+                                       value="0" 
+                                       required 
+                                       class="input-field" 
+                                       placeholder="0" 
+                                       style="width: 100%; font-weight: 700; color: #0f172a;">
+                            </td>
+                            <td>
+                                <input type="text" 
+                                       name="line_remarks" 
+                                       class="input-field" 
+                                       placeholder="Optional line remarks..." 
+                                       style="width: 100%;">
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                <a href="/grn" class="btn-outline" style="padding: 10px 20px;">Cancel</a>
+                <button type="submit" class="btn-primary" style="padding: 10px 28px; font-weight: 600; background-color: #2563eb; border-color: #2563eb;">
+                    {% if is_convert %}Save Changes{% else %}Create GRN →{% endif %}
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function loadWoBomDetails(woId) {
+    const sec = document.getElementById('wo_details_section');
+    const select = document.getElementById('wo_select_dropdown');
+    
+    if (!woId) {
+        sec.style.display = 'none';
+        return;
+    }
+
+    const opt = select.options[select.selectedIndex];
+    const bomCode = opt.getAttribute('data-bomcode') || '';
+    const bomDesc = opt.getAttribute('data-bomdesc') || '';
+
+    document.getElementById('hidden_bom_code').value = bomCode || ('BOM-' + woId);
+    document.getElementById('display_bom_code').innerText = bomCode || ('BOM-' + woId);
+
+    document.getElementById('hidden_bom_desc').value = bomDesc || 'BOM Assembly';
+    document.getElementById('display_bom_desc').innerText = bomDesc || 'BOM Assembly';
+
+    sec.style.display = 'block';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const select = document.getElementById('wo_select_dropdown');
+    if (select && select.value) {
+        loadWoBomDetails(select.value);
+    }
+});
+</script>
+{% endblock %}

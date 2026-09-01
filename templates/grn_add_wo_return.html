@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header" style="max-width: 1100px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center;">
+    <h1>{% if is_convert %}Modify GRN Type — {{ grn_no }}{% else %}New Back To Store GRN — {{ grn_no }}{% endif %}</h1>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="{% if is_convert %}/grn{% else %}/grn/add{% endif %}" class="btn-outline">← Back</a>
+    </div>
+</div>
+
+<div class="form-card" style="max-width: 1100px; width: 100%; margin: 0 auto; padding: 32px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); box-sizing: border-box;">
+    <form method="post" action="{% if is_convert %}/grn/{{ grn.grn_id }}/convert{% else %}/grn/add/wo-return{% endif %}" id="woReturnForm">
+        <input type="hidden" name="grn_no" value="{{ grn_no }}">
+        {% if is_convert %}
+        <input type="hidden" name="target_type" value="{{ target_type }}">
+        {% endif %}
+
+        <!-- 1. Work Order Selection Box -->
+        <div style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 22px; border-radius: 10px; margin-bottom: 24px; position: relative;">
+            <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 16px; color: #1a2e4a; font-weight: 700;">1. Work Order Selection</h3>
+            
+            <div class="form-group" style="margin-bottom: 0;">
+                <label style="font-size: 13px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">
+                    Select Work Order Number <span style="color:red;">*</span>
+                </label>
+                <select id="wo_select_dropdown" name="wo_id_ref" class="input-field" required onchange="loadWoDetails(this.value)" style="width: 100%; font-size: 14px; padding: 10px 12px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px;">
+                    <option value="">— Search or Select Work Order —</option>
+                    {% for wo in work_orders %}
+                    <option value="{{ wo.wo_id }}">
+                        WO #{{ wo.wo_number }} — {{ wo.description or 'No Description' }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- 2. Section Details & Items (Shown on selecting WO) -->
+        <div id="wo_details_section" style="display: none; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 16px; color: #1a2e4a; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">2. Return Details & Items</h3>
+
+            <div class="form-grid" style="margin-bottom: 24px;">
+                <div class="form-group">
+                    <label style="font-weight: 600;">Invoice Number <span style="color:red;">*</span></label>
+                    <input type="text" name="invoice_no" id="invoice_no" class="input-field" value="{{ grn.invoice_no if is_convert and grn else '' }}" placeholder="e.g. WO-RET-2026-001" required>
+                </div>
+                <div class="form-group">
+                    <label style="font-weight: 600;">Invoice Date <span style="color:red;">*</span></label>
+                    <input type="date" name="invoice_date" id="invoice_date" class="input-field" value="{{ grn.invoice_date if is_convert and grn and grn.invoice_date else today }}" required>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label style="font-weight: 600;">Project Details</label>
+                    <input type="text" name="project_details" id="project_details" class="input-field" placeholder="Enter project name or details">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label style="font-weight: 600;">Remarks</label>
+                    <input type="text" name="remarks" class="input-field" value="{{ grn.remarks if is_convert and grn else '' }}" placeholder="Optional return comments or reason">
+                </div>
+            </div>
+
+            <!-- Items Returned Header Bar -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+                <h3 style="margin: 0; font-size: 16px; color: #1a2e4a; font-weight: 700;">Returned Items (Work Order Items)</h3>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button type="button" id="btn_toggle_not_returned_mode" onclick="toggleNotReturnedMode()" class="btn-outline" style="font-size: 12px; padding: 6px 14px; font-weight: 600; border-color: #cbd5e1; color: #475569;">
+                        ☑ Select Items Not Returned
+                    </button>
+                    <button type="button" id="btn_confirm_move_wo" onclick="confirmMoveToNotReturned()" class="btn-primary" style="display: none; font-size: 12px; padding: 6px 14px; background-color: #d97706; border-color: #d97706; font-weight: 600;">
+                        Confirm Move to Not Returned
+                    </button>
+                </div>
+            </div>
+
+            <!-- Returned Items Table -->
+            <div style="border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; margin-bottom: 24px;">
+                <table class="data-table" id="wo-return-items-table" style="margin: 0; width: 100%;">
+                    <thead>
+                        <tr style="background: #f8fafc;">
+                            <th id="th_checkbox_wo" style="display: none; width: 40px; text-align: center;"><input type="checkbox" onchange="toggleSelectAllWo(this)"></th>
+                            <th style="width: 50px;">#</th>
+                            <th style="min-width: 140px;">Item Code</th>
+                            <th style="min-width: 220px;">Item Description</th>
+                            <th style="width: 110px;">Qty Required</th>
+                            <th style="width: 140px;">Qty Received <span style="color:red;">*</span></th>
+                            <th>Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wo-return-items-body">
+                        <!-- Loaded dynamically via JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Not Returned Table Section -->
+            <div id="not_returned_container" style="display: none; margin-top: 28px; border: 1px dashed #f59e0b; background: #fffbe6; border-radius: 10px; padding: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                    <h3 style="margin: 0; font-size: 15px; color: #b45309; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                        <span>📦 Not returned</span>
+                        <span id="not_returned_count_badge" style="background: #fef3c7; color: #b45309; font-size: 12px; padding: 2px 10px; border-radius: 12px; border: 1px solid #fcd34d;">0 items</span>
+                    </h3>
+                    <span style="font-size: 12px; color: #92400e;">Items in this section are marked as not returned for this GRN</span>
+                </div>
+                
+                <div style="border: 1px solid #fef3c7; border-radius: 8px; overflow: hidden; background: #fff;">
+                    <table class="data-table" id="not-returned-table" style="margin: 0; width: 100%;">
+                        <thead style="background: #fef3c7; color: #92400e;">
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th style="min-width: 140px;">Item Code</th>
+                                <th style="min-width: 220px;">Item Description</th>
+                                <th style="width: 110px;">Qty Required</th>
+                                <th style="width: 120px;">Status</th>
+                                <th style="width: 140px; text-align: center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="not-returned-body">
+                            <!-- Populated when items moved -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div style="display:flex; gap:12px; margin-top:24px;">
+                <button type="submit" class="btn-primary" style="padding: 10px 24px; font-weight: 600; font-size: 14px;">{% if is_convert %}Save modified GRN Type{% else %}Save GRN{% endif %}</button>
+                <a href="/grn" class="btn-outline" style="padding: 10px 20px; font-size: 14px;">Cancel</a>
+            </div>
+        </div>
+
+        <div id="no_wo_selected_notice" style="padding: 40px; text-align: center; color: #64748b; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px;">
+            <p style="margin: 0; font-size: 15px; font-weight: 500;">Please select a Work Order Number above to view associated items and enter return details.</p>
+        </div>
+
+    </form>
+</div>
+
+<script>
+let woItemsState = [];
+let isSelectModeActive = false;
+
+function loadWoDetails(woId) {
+    if (!woId) {
+        document.getElementById('wo_details_section').style.display = 'none';
+        document.getElementById('no_wo_selected_notice').style.display = 'block';
+        return;
+    }
+
+    fetch('/api/wo-items/' + woId)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                woItemsState = (data.items || []).map(item => ({
+                    item_id: item.item_id,
+                    item_code: item.item_code,
+                    item_desc: item.item_desc || '',
+                    qty_required: item.qty_required || item.qty_issued || item.qty_to_build || 1,
+                    unit: item.unit || '',
+                    qty_received: 0,
+                    remarks: '',
+                    is_received: true
+                }));
+
+                isSelectModeActive = false;
+                renderTables();
+
+                document.getElementById('no_wo_selected_notice').style.display = 'none';
+                document.getElementById('wo_details_section').style.display = 'block';
+            } else {
+                alert('Error loading Work Order items: ' + (data.message || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Failed to load Work Order details');
+        });
+}
+
+function renderTables() {
+    // 1. Render Returned Items Table
+    const recBody = document.getElementById('wo-return-items-body');
+    const thCheckbox = document.getElementById('th_checkbox_wo');
+    recBody.innerHTML = '';
+
+    thCheckbox.style.display = isSelectModeActive ? 'table-cell' : 'none';
+    document.getElementById('btn_confirm_move_wo').style.display = isSelectModeActive ? 'inline-block' : 'none';
+    document.getElementById('btn_toggle_not_returned_mode').innerText = isSelectModeActive ? 'Cancel Selection' : '☑ Select Items Not Returned';
+
+    const returnedItems = woItemsState.filter(item => item.is_received);
+
+    if (returnedItems.length > 0) {
+        returnedItems.forEach((item, idx) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                ${isSelectModeActive ? `<td style="text-align: center;"><input type="checkbox" class="item-not-ret-checkbox" data-id="${item.item_id}"></td>` : ''}
+                <td>${idx + 1}</td>
+                <td>
+                    <strong>${item.item_code}</strong>
+                    <input type="hidden" name="item_id[]" value="${item.item_id}">
+                </td>
+                <td>${item.item_desc || '—'}</td>
+                <td>${item.qty_required} ${item.unit || ''}</td>
+                <td>
+                    <input type="number" step="0.001" min="0" name="qty_received[]" class="input-field" value="${item.qty_received}" onchange="updateItemQty(${item.item_id}, this.value)" required style="width: 100%; font-weight: 600;">
+                </td>
+                <td>
+                    <input type="text" name="line_remarks[]" class="input-field" value="${item.remarks}" onchange="updateItemRemarks(${item.item_id}, this.value)" placeholder="Item return notes..." style="width: 100%;">
+                </td>
+            `;
+            recBody.appendChild(tr);
+        });
+    } else {
+        recBody.innerHTML = '<tr><td colspan="' + (isSelectModeActive ? 7 : 6) + '" style="text-align:center; color:#888; padding:20px;">All items marked as not returned.</td></tr>';
+    }
+
+    // 2. Render Not Returned Items Table
+    const notRecBody = document.getElementById('not-returned-body');
+    const notRecContainer = document.getElementById('not_returned_container');
+    notRecBody.innerHTML = '';
+
+    const notReturnedItems = woItemsState.filter(item => !item.is_received);
+
+    if (notReturnedItems.length > 0) {
+        notRecContainer.style.display = 'block';
+        document.getElementById('not_returned_count_badge').innerText = notReturnedItems.length + (notReturnedItems.length === 1 ? ' item' : ' items');
+
+        notReturnedItems.forEach((item, idx) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${idx + 1}</td>
+                <td><strong>${item.item_code}</strong></td>
+                <td>${item.item_desc || '—'}</td>
+                <td>${item.qty_required} ${item.unit || ''}</td>
+                <td><span class="badge badge-cancelled" style="background:#fef3c7; color:#b45309; border:1px solid #fcd34d;">Not Returned</span></td>
+                <td style="text-align: center;">
+                    <button type="button" onclick="moveBackToReturned(${item.item_id})" class="btn-outline" style="font-size: 11px; padding: 4px 10px; color: #1e40af; border-color: #93c5fd; font-weight: 600;">
+                        ↩ Move to Returned
+                    </button>
+                </td>
+            `;
+            notRecBody.appendChild(tr);
+        });
+    } else {
+        notRecContainer.style.display = 'none';
+    }
+}
+
+function updateItemQty(itemId, val) {
+    const item = woItemsState.find(i => i.item_id === itemId);
+    if (item) item.qty_received = val;
+}
+
+function updateItemRemarks(itemId, val) {
+    const item = woItemsState.find(i => i.item_id === itemId);
+    if (item) item.remarks = val;
+}
+
+function toggleNotReturnedMode() {
+    isSelectModeActive = !isSelectModeActive;
+    renderTables();
+}
+
+function toggleSelectAllWo(masterCb) {
+    const checkboxes = document.querySelectorAll('.item-not-ret-checkbox');
+    checkboxes.forEach(cb => cb.checked = masterCb.checked);
+}
+
+function confirmMoveToNotReturned() {
+    const checkboxes = document.querySelectorAll('.item-not-ret-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one item using the checkbox to move to Not Returned.');
+        return;
+    }
+
+    checkboxes.forEach(cb => {
+        const id = parseInt(cb.getAttribute('data-id'));
+        const item = woItemsState.find(i => i.item_id === id);
+        if (item) {
+            item.is_received = false;
+        }
+    });
+
+    isSelectModeActive = false;
+    renderTables();
+}
+
+function moveBackToReturned(itemId) {
+    const item = woItemsState.find(i => i.item_id === itemId);
+    if (item) {
+        item.is_received = true;
+        renderTables();
+    }
+}
+</script>
+{% endblock %}

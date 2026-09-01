@@ -1,0 +1,464 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>Goods Received Notes</h1>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="/grn/add" class="btn-primary" style="text-decoration: none;">+ New GRN</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="filter-bar" style="margin-bottom: 20px;">
+    <form method="get" action="/grn" id="grnFilterForm" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="search" placeholder="Search GRN / invoice..."
+               value="{{ search }}" class="search-input" style="min-width: 170px;">
+        <select name="grn_type" class="filter-select">
+            <option value="">All Types</option>
+            <option value="0" {% if type_filter == '0' %}selected{% endif %}>Purchase</option>
+            <option value="1" {% if type_filter == '1' %}selected{% endif %}>Back To Store</option>
+            <option value="2" {% if type_filter == '2' %}selected{% endif %}>Internal Return</option>
+            <option value="3" {% if type_filter == '3' %}selected{% endif %}>Online Purchase</option>
+            <option value="4" {% if type_filter == '4' %}selected{% endif %}>Any Type</option>
+            <option value="5" {% if type_filter == '5' %}selected{% endif %}>Work Order Return</option>
+        </select>
+
+        <!-- Dedicated Item Code Search Box with Prediction Autocomplete -->
+        <div style="position: relative; flex: 1; min-width: 280px;" id="itemSearchContainer">
+            <input type="hidden" name="item_id" id="selectedItemId" value="{{ selected_item.item_id if selected_item else '' }}">
+            <div style="display: flex; align-items: center; position: relative;">
+                <input type="text" 
+                       name="item_search" 
+                       id="itemSearchInput" 
+                       placeholder="🔍 Search Item Code / Desc predictions..." 
+                       value="{% if selected_item %}{{ selected_item.item_code }}{% else %}{{ item_search }}{% endif %}" 
+                       class="search-input" 
+                       style="width: 100%; padding-right: 28px; font-weight: 600;"
+                       autocomplete="off">
+                <button type="button" id="clearItemInputBtn" onclick="clearItemSearch()" 
+                        style="display: {% if selected_item or item_search %}block{% else %}none{% endif %}; position: absolute; right: 8px; background: none; border: none; font-size: 14px; color: #94a3b8; cursor: pointer;">✕</button>
+            </div>
+            
+            <!-- Prediction Dropdown -->
+            <div id="itemPredictionsDropdown" 
+                 style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); max-height: 280px; overflow-y: auto; z-index: 1000; margin-top: 4px;">
+            </div>
+        </div>
+
+        <button type="submit" class="btn-dark" style="padding: 8px 18px;">Filter GRNs</button>
+        <a href="/grn" class="btn-outline" style="padding: 8px 14px;">Reset All</a>
+    </form>
+</div>
+
+<!-- Reference Box for Selected Item -->
+{% if selected_item or item_search %}
+<div class="item-reference-box" style="background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border: 1px solid #cbd5e1; border-left: 5px solid #2563eb; border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
+        <div style="flex: 1; min-width: 280px;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="background: #2563eb; color: #fff; font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.5px;">Filtered Item Reference</span>
+                {% if selected_item %}
+                <h2 style="margin: 0; font-size: 22px; color: #0f172a; font-weight: 800;">{{ selected_item.item_code }}</h2>
+                {% else %}
+                <h2 style="margin: 0; font-size: 18px; color: #0f172a; font-weight: 700;">Search results for "{{ item_search }}"</h2>
+                {% endif %}
+            </div>
+            {% if selected_item %}
+            <p style="margin: 4px 0 10px; font-size: 14px; color: #334155; font-weight: 500; line-height: 1.4;">
+                <strong>Description:</strong> {{ selected_item.desc or 'N/A' }}
+            </p>
+            <div style="display: flex; gap: 20px; font-size: 13px; color: #64748b; flex-wrap: wrap;">
+                <span><strong>MPN:</strong> <code style="color:#1e293b; background:#e2e8f0; padding:2px 6px; border-radius:4px; font-weight:600;">{{ selected_item.mpn or '—' }}</code></span>
+                <span><strong>Unit:</strong> {{ selected_item.unit or '—' }}</span>
+                <span><strong>Item ID:</strong> #{{ selected_item.item_id }}</span>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Summary Stats Badges -->
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 95px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">Matching GRNs</div>
+                <div style="font-size: 20px; font-weight: 800; color: #2563eb;">{{ grns|length }}</div>
+            </div>
+            {% if item_stats %}
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 105px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">Total Recv Qty</div>
+                <div style="font-size: 20px; font-weight: 800; color: #0f172a;">{{ item_stats.total_received }}</div>
+            </div>
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 95px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                <div style="font-size: 11px; color: #16a34a; font-weight: 600; text-transform: uppercase;">Accepted</div>
+                <div style="font-size: 18px; font-weight: 700; color: #16a34a;">{{ item_stats.total_accepted }}</div>
+            </div>
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 95px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                <div style="font-size: 11px; color: #dc2626; font-weight: 600; text-transform: uppercase;">Rejected</div>
+                <div style="font-size: 18px; font-weight: 700; color: #dc2626;">{{ item_stats.total_rejected }}</div>
+            </div>
+            {% endif %}
+            <a href="/grn{% if type_filter != '' %}?grn_type={{ type_filter }}{% if search %}&search={{ search }}{% endif %}{% elif search %}?search={{ search }}{% endif %}" 
+               class="btn-outline" 
+               style="padding: 8px 14px; font-size: 13px; font-weight: 600; color: #64748b; text-decoration: none; border-color: #cbd5e1; background: #fff; border-radius: 8px; display: inline-flex; align-items: center; gap: 4px;">
+               ✕ Clear Item Filter
+            </a>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>GRN No</th>
+                <th>Vendor Name</th>
+                <th>Type of GRN</th>
+                <th>Invoice No</th>
+                {% if selected_item %}
+                <th style="background: #eff6ff; color: #1d4ed8;">Qty of {{ selected_item.item_code }} Recv</th>
+                {% endif %}
+                <th>GRN Status</th>
+                <th>QC Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if grns %}
+            {% for g in grns %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td><strong>{{ g.grn_no }}</strong></td>
+                <td>{{ g.vendor_name or '—' }}</td>
+                <td>
+                    <span class="badge {% if g.grn_type == 1 %}badge-inprogress{% elif g.grn_type == 0 %}badge-open{% elif g.grn_type == 3 %}badge-active{% elif g.grn_type == 4 %}badge-reopened{% else %}badge-reopened{% endif %}">
+                        {{ g.grn_type_label }}
+                    </span>
+                </td>
+                <td>{{ g.invoice_no or '—' }}</td>
+                {% if selected_item %}
+                <td style="background: #f8fafc;"><strong style="color: #2563eb; font-size: 14px;">{{ g.specific_item_qty }} {{ selected_item.unit or '' }}</strong></td>
+                {% endif %}
+                <td>
+                    {% if g.grn_status and g.grn_status != '—' %}
+                    <span class="badge {{ g.status_badge }}">
+                        {{ g.grn_status }}
+                    </span>
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td>
+                    <span class="badge {{ g.qc_status_badge }}">
+                        {{ g.qc_status or 'QC Incomplete' }}
+                    </span>
+                </td>
+                <td style="white-space: nowrap;">
+                    <a href="/grn/{{ g.grn_id }}" class="btn btn-secondary" style="font-size:12px; padding:4px 10px; text-decoration: none;">View</a>
+                    {% if g.grn_type == 3 %}
+                    <button type="button" class="btn-outline" onclick="openEditPoModal('{{ g.grn_id }}', '{{ g.grn_no }}', '{{ g.po_number or '' }}')" style="font-size:12px; padding:4px 10px; margin-left: 4px; border-color: #cbd5e1; color: #475569;">Edit PO</button>
+                    {% endif %}
+                    {% if g.grn_type == 4 %}
+                    <button type="button" class="btn-outline" onclick="openModifyTypeModal('{{ g.grn_id }}', '{{ g.grn_no }}')" style="font-size:12px; padding:4px 10px; margin-left: 4px; border-color: #2563eb; color: #1d4ed8; font-weight: 600; background: #eff6ff;">Modify Type</button>
+                    {% endif %}
+                    <a href="/grn/{{ g.grn_id }}/qc" class="btn btn-primary" style="font-size:12px; padding:4px 10px; margin-left: 4px; text-decoration: none; background-color: #0d9488; border-color: #0d9488;">QC Inspection</a>
+                    <button type="button" class="btn-outline" onclick="openShowQcModal('{{ g.grn_id }}', '{{ g.grn_no }}')" style="font-size:12px; padding:4px 10px; margin-left: 4px; border-color: #64748b; color: #334155; background: #f8fafc; font-weight: 600;">Show QC</button>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="{% if selected_item %}9{% else %}8{% endif %}" style="text-align:center; color:#888; padding:40px;">No GRNs found.</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Edit PO Number Modal -->
+<div id="editPoModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.5); z-index: 99999; justify-content: center; align-items: center;">
+    <div style="background: #ffffff; padding: 24px 28px; border-radius: 12px; max-width: 450px; width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 18px; color: #1e293b;" id="modalGrnTitle">Edit PO Number</h3>
+        <p style="font-size: 13px; color: #64748b; margin-top: 0; margin-bottom: 20px;">Update or assign PO Number for this Goods Received Note.</p>
+        
+        <form method="post" id="editPoForm">
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label style="font-weight: 600; font-size: 13px; color: #334155;">PO Number</label>
+                <select id="modalPoSelect" class="input-field" style="width: 100%; font-size: 14px; font-weight: 600; margin-bottom: 8px; background: #fff;" onchange="onModalPoSelectChange(this.value)">
+                    <option value="">— Select Existing Purchase Order —</option>
+                    {% for po in purchase_orders %}
+                    <option value="{{ po.formatted_po_number }}">{{ po.formatted_po_number }} — {{ po.vendor_short_name or po.vendor_full_name or 'No Vendor' }}</option>
+                    {% endfor %}
+                    <option value="__custom__">✏️ Type Custom PO Number...</option>
+                </select>
+                <input type="text" name="po_number" id="modalPoNumberInput" class="input-field" placeholder="Enter PO Number..." style="width: 100%; font-size: 14px; font-weight: 600;">
+            </div>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" onclick="closeEditPoModal()" class="btn-outline" style="padding: 8px 16px;">Cancel</button>
+                <button type="submit" class="btn-primary" style="padding: 8px 20px;">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modify GRN Type Modal -->
+<div id="modifyTypeModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.5); z-index: 99999; justify-content: center; align-items: center;">
+    <div style="background: #ffffff; padding: 24px 28px; border-radius: 12px; max-width: 450px; width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 18px; color: #1e293b;" id="modalModifyTypeTitle">Modify GRN Type</h3>
+        <p style="font-size: 13px; color: #64748b; margin-top: 0; margin-bottom: 20px;">Select target GRN type to redirect and enter missing details.</p>
+        
+        <form method="get" id="modifyTypeForm">
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label style="font-weight: 600; font-size: 13px; color: #334155;">Select Target GRN Type <span style="color:red;">*</span></label>
+                <select name="target_type" id="modalTargetTypeSelect" class="input-field" required style="width: 100%; font-size: 14px; padding: 10px 12px; background: #fff;">
+                    <option value="0">Purchase</option>
+                    <option value="1">Back To Store</option>
+                    <option value="2">Internal Return</option>
+                    <option value="3">Online Purchase</option>
+                    <option value="5">Work Order Return</option>
+                </select>
+            </div>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" onclick="closeModifyTypeModal()" class="btn-outline" style="padding: 8px 16px;">Cancel</button>
+                <button type="submit" class="btn-primary" style="padding: 8px 20px; background-color: #2563eb; border-color: #2563eb;">Confirm →</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Show QC Status Modal -->
+<div id="showQcModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.5); z-index: 99999; justify-content: center; align-items: center;">
+    <div style="background: #ffffff; padding: 24px 28px; border-radius: 12px; max-width: 850px; width: 90%; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 18px; color: #1e293b;" id="showQcModalTitle">QC Status Details</h3>
+            <button type="button" onclick="closeShowQcModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #64748b;">&times;</button>
+        </div>
+        <p style="font-size: 13px; color: #64748b; margin-top: 0; margin-bottom: 16px;">View-only inspection status breakdown for each item in this Goods Received Note.</p>
+        
+        <div class="table-wrapper" style="margin-bottom: 20px;">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Item Code</th>
+                        <th>Item Description</th>
+                        <th style="text-align: right;">Qty Received</th>
+                        <th style="text-align: right;">Qty Accepted</th>
+                        <th style="text-align: right;">Qty Pending</th>
+                        <th style="text-align: right;">Qty Rejected</th>
+                        <th>Item QC Status</th>
+                        <th>Remarks</th>
+                    </tr>
+                </thead>
+                <tbody id="showQcTableBody">
+                    <tr><td colspan="8" style="text-align: center; color: #64748b; padding: 20px;">Loading QC details...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end;">
+            <button type="button" onclick="closeShowQcModal()" class="btn-outline" style="padding: 8px 20px;">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function openEditPoModal(grnId, grnNo, currentPoNumber) {
+    const modal = document.getElementById('editPoModal');
+    const form = document.getElementById('editPoForm');
+    const title = document.getElementById('modalGrnTitle');
+    const input = document.getElementById('modalPoNumberInput');
+    const select = document.getElementById('modalPoSelect');
+
+    title.innerText = 'Edit PO Number — ' + grnNo;
+    input.value = currentPoNumber || '';
+    form.action = '/grn/' + grnId + '/edit-po';
+
+    if (select) {
+        let found = false;
+        for (let opt of select.options) {
+            if (opt.value && opt.value === currentPoNumber) {
+                select.value = currentPoNumber;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            select.value = currentPoNumber ? '__custom__' : '';
+        }
+    }
+    
+    modal.style.display = 'flex';
+}
+
+function onModalPoSelectChange(val) {
+    const input = document.getElementById('modalPoNumberInput');
+    if (val && val !== '__custom__') {
+        input.value = val;
+    } else if (val === '__custom__') {
+        input.value = '';
+        input.focus();
+    }
+}
+
+function closeEditPoModal() {
+    document.getElementById('editPoModal').style.display = 'none';
+}
+
+function openModifyTypeModal(grnId, grnNo) {
+    const modal = document.getElementById('modifyTypeModal');
+    const form = document.getElementById('modifyTypeForm');
+    const title = document.getElementById('modalModifyTypeTitle');
+
+    title.innerText = 'Modify GRN Type — ' + grnNo;
+    form.action = '/grn/' + grnId + '/convert';
+    
+    modal.style.display = 'flex';
+}
+
+function closeModifyTypeModal() {
+    document.getElementById('modifyTypeModal').style.display = 'none';
+}
+
+function openShowQcModal(grnId, grnNo) {
+    const modal = document.getElementById('showQcModal');
+    const title = document.getElementById('showQcModalTitle');
+    const tbody = document.getElementById('showQcTableBody');
+    
+    title.innerText = 'QC Status Details — ' + grnNo;
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b; padding: 20px;">Loading QC details...</td></tr>';
+    modal.style.display = 'flex';
+    
+    fetch('/api/grn/' + grnId + '/qc-details')
+        .then(response => response.json())
+        .then(data => {
+            if (!data.items || data.items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b; padding: 20px;">No items found for this GRN.</td></tr>';
+                return;
+            }
+            let html = '';
+            data.items.forEach(it => {
+                let badgeClass = 'badge-open';
+                if (it.qc_status === 'Accepted') badgeClass = 'badge-active';
+                else if (it.qc_status === 'Rejected') badgeClass = 'badge-cancelled';
+                else if (it.qc_status === 'Partially Accepted' || it.qc_status === 'In Progress') badgeClass = 'badge-inprogress';
+                
+                html += '<tr>' +
+                    '<td><strong>' + escapeHtml(it.item_code) + '</strong></td>' +
+                    '<td>' + escapeHtml(it.item_desc) + '</td>' +
+                    '<td style="text-align: right;">' + it.qty_received + '</td>' +
+                    '<td style="text-align: right; font-weight: 600; color: #16a34a;">' + it.qty_accepted + '</td>' +
+                    '<td style="text-align: right; font-weight: 600; color: #2563eb;">' + it.qty_pending + '</td>' +
+                    '<td style="text-align: right; font-weight: 600; color: #dc2626;">' + it.qty_rejected + '</td>' +
+                    '<td><span class="badge ' + badgeClass + '">' + escapeHtml(it.qc_status) + '</span></td>' +
+                    '<td>' + escapeHtml(it.remarks || '—') + '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = html;
+        })
+        .catch(err => {
+            console.error('Error fetching QC details:', err);
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #dc2626; padding: 20px;">Failed to load QC details.</td></tr>';
+        });
+}
+
+function closeShowQcModal() {
+    document.getElementById('showQcModal').style.display = 'none';
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+// Item Prediction Autocomplete JS
+let itemPredictionTimer = null;
+const itemInput = document.getElementById('itemSearchInput');
+const selectedItemIdHidden = document.getElementById('selectedItemId');
+const predictionsDropdown = document.getElementById('itemPredictionsDropdown');
+const clearItemBtn = document.getElementById('clearItemInputBtn');
+
+if (itemInput) {
+    itemInput.addEventListener('input', function() {
+        const val = this.value.trim();
+        if (selectedItemIdHidden) selectedItemIdHidden.value = '';
+        if (clearItemBtn) clearItemBtn.style.display = val ? 'block' : 'none';
+        
+        clearTimeout(itemPredictionTimer);
+        if (val.length < 1) {
+            if (predictionsDropdown) predictionsDropdown.style.display = 'none';
+            return;
+        }
+        
+        itemPredictionTimer = setTimeout(() => {
+            fetch('/api/items/search?q=' + encodeURIComponent(val))
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.items || data.items.length === 0) {
+                        predictionsDropdown.innerHTML = '<div style="padding: 10px 14px; font-size: 13px; color: #94a3b8;">No matching items found.</div>';
+                        predictionsDropdown.style.display = 'block';
+                        return;
+                    }
+                    let html = '';
+                    data.items.forEach(it => {
+                        html += '<div class="prediction-item" onclick="selectItemPrediction(' + it.item_id + ', \'' + escapeJsStr(it.item_code) + '\')" style="padding: 8px 12px; border-bottom: 1px solid #f1f5f9; cursor: pointer;">' +
+                            '<div style="display: flex; justify-content: space-between; align-items: center;">' +
+                                '<strong style="color: #1e293b; font-size: 13px;">' + escapeHtml(it.item_code) + '</strong>' +
+                                '<span style="font-size: 11px; color: #64748b; background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">' + escapeHtml(it.unit || '') + '</span>' +
+                            '</div>' +
+                            '<div style="font-size: 12px; color: #64748b; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' +
+                                escapeHtml(it.item_desc || '') + (it.mpn ? ' • MPN: ' + escapeHtml(it.mpn) : '') +
+                            '</div>' +
+                        '</div>';
+                    });
+                    predictionsDropdown.innerHTML = html;
+                    predictionsDropdown.style.display = 'block';
+
+                    document.querySelectorAll('.prediction-item').forEach(el => {
+                        el.addEventListener('mouseenter', () => el.style.background = '#eff6ff');
+                        el.addEventListener('mouseleave', () => el.style.background = '#ffffff');
+                    });
+                })
+                .catch(err => console.error('Error fetching item predictions:', err));
+        }, 200);
+    });
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#itemSearchContainer')) {
+            if (predictionsDropdown) predictionsDropdown.style.display = 'none';
+        }
+    });
+}
+
+function selectItemPrediction(itemId, itemCode) {
+    if (selectedItemIdHidden) selectedItemIdHidden.value = itemId;
+    if (itemInput) itemInput.value = itemCode;
+    if (predictionsDropdown) predictionsDropdown.style.display = 'none';
+    document.getElementById('grnFilterForm').submit();
+}
+
+function clearItemSearch() {
+    if (selectedItemIdHidden) selectedItemIdHidden.value = '';
+    if (itemInput) itemInput.value = '';
+    if (clearItemBtn) clearItemBtn.style.display = 'none';
+    if (predictionsDropdown) predictionsDropdown.style.display = 'none';
+    document.getElementById('grnFilterForm').submit();
+}
+
+function escapeJsStr(str) {
+    if (!str) return '';
+    return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+</script>
+{% endblock %}

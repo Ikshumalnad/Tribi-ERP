@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>Purchase Orders</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('work-order')">📋 Refer to Work Orders</button>
+        <a href="/purchase-order/add" class="btn btn-primary" style="text-decoration:none;">+ New Purchase Order</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="filter-bar" style="margin-bottom: 20px;">
+    <form method="get" action="/purchase-order" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="search" placeholder="Search PO number, vendor, status..."
+               value="{{ search }}" class="search-input" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px; width: 280px;">
+        <select name="status" class="filter-select" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px;">
+            <option value="">All Statuses</option>
+            <option value="Draft" {% if status_filter == 'Draft' %}selected{% endif %}>Draft</option>
+            <option value="Open" {% if status_filter == 'Open' %}selected{% endif %}>Open</option>
+            <option value="Reviewed" {% if status_filter == 'Reviewed' %}selected{% endif %}>Reviewed</option>
+            <option value="Approved" {% if status_filter == 'Approved' %}selected{% endif %}>Approved</option>
+            <option value="Cancelled" {% if status_filter == 'Cancelled' %}selected{% endif %}>Cancelled</option>
+            <option value="Closed" {% if status_filter == 'Closed' %}selected{% endif %}>Closed</option>
+        </select>
+        <button type="submit" class="btn btn-primary" style="padding: 8px 14px;">Search</button>
+        <a href="/purchase-order" class="btn btn-secondary" style="padding: 8px 14px; text-decoration: none;">Clear</a>
+    </form>
+</div>
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>PO Number</th>
+                <th>Vendor</th>
+                <th>Date Raised</th>
+                <th>Raised By</th>
+                <th>Status</th>
+                <th>Instructions</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if purchase_orders %}
+            {% for po in purchase_orders %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td><a href="/purchase-order/{{ po.po_id }}" class="table-link"><strong>{{ po.formatted_po_number }}</strong></a></td>
+                <td>
+                    <span title="{{ po.vendor_full_name }}">{{ po.vendor_name }}</span>
+                </td>
+                <td>{{ po.date_raised or '—' }}</td>
+                <td>{{ po.raised_by or '—' }}</td>
+                <td>
+                    <span class="badge {% if po.po_status == 'Draft' %}badge-reopened{% elif po.po_status == 'Open' %}badge-open{% elif po.po_status == 'Reviewed' %}badge-inprogress{% elif po.po_status == 'Approved' %}badge-active{% elif po.po_status == 'Cancelled' %}badge-cancelled{% elif po.po_status == 'Closed' %}badge-closed{% else %}badge-open{% endif %}">
+                        {{ po.po_status or 'Open' }}
+                    </span>
+                </td>
+                <td style="max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    {{ po.remarks or '—' }}
+                </td>
+                <td style="white-space: nowrap;">
+                    <!-- Lock/Unlock action -->
+                    <form method="POST" action="/purchase-order/{{ po.po_id }}/{% if po.is_locked %}unlock{% else %}lock{% endif %}" style="display:inline-block;">
+                        <button type="submit" class="btn {% if po.is_locked %}btn-dark{% else %}btn-secondary{% endif %}" style="font-size:12px; padding:4px 10px; min-width: 80px;">
+                            {% if po.is_locked %}Unlock{% else %}Lock{% endif %}
+                        </button>
+                    </form>
+
+                    <!-- Review / Amend / Modify button -->
+                    {% if po.is_locked %}
+                        {% set po_items = po_items_map.get(po.po_id, []) %}
+                        {% set vars = {'subtotal': 0.0, 'total_tax': 0.0} %}
+                        {% for item in po_items %}
+                            {% set qty = item.qty_ordered | float %}
+                            {% set price = item.unit_price | float %}
+                            {% set line_price = (qty * price) | round(4) %}
+                            {% if vars.update({'subtotal': vars.subtotal + line_price}) %}{% endif %}
+                            {% set tax_rate = item.tax_rate | float if item.tax_rate is not none else 18.0 %}
+                            {% set line_tax = (line_price * (tax_rate / 100.0)) | round(4) %}
+                            {% if vars.update({'total_tax': vars.total_tax + line_tax}) %}{% endif %}
+                        {% endfor %}
+                        {% set grand_total = (vars.subtotal + vars.total_tax) | round(2) %}
+
+                        {% if po.po_status in ['Draft', 'Open'] %}
+                            <button type="button" class="btn btn-primary" style="font-size:12px; padding:4px 10px; margin-left: 4px;" onclick="openReviewModal({{ po.po_id }})">Review</button>
+                        {% elif po.po_status == 'Reviewed' %}
+                            <button type="button" class="btn btn-primary" disabled style="font-size:12px; padding:4px 10px; margin-left: 4px; opacity: 0.65; cursor: not-allowed;">Reviewed</button>
+                        {% endif %}
+                    {% else %}
+                        {% set ver_num = (po.po_version_number | float | int) if po.po_version_number else 0 %}
+                        {% if po.po_status == 'Approved' or ver_num > 0 %}
+                            <a href="/purchase-order/{{ po.po_id }}/edit" class="btn btn-warning" style="font-size:12px; padding:4px 10px; margin-left: 4px; text-decoration: none;">Amend</a>
+                        {% else %}
+                            <a href="/purchase-order/{{ po.po_id }}/edit" class="btn btn-warning" style="font-size:12px; padding:4px 10px; margin-left: 4px; text-decoration: none; background-color: #3182ce; border-color: #3182ce;">Modify</a>
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- Approve button -->
+                    {% if po.po_status == 'Approved' %}
+                        <button type="button" class="btn btn-success" disabled style="font-size:12px; padding:4px 10px; margin-left: 4px; opacity: 0.65; cursor: not-allowed;">Approved</button>
+                    {% else %}
+                        {% if not po.is_locked %}
+                            <button type="button" class="btn btn-success" style="font-size:12px; padding:4px 10px; margin-left: 4px;" onclick="alert('please lock the purchase order to review it')">Approve</button>
+                        {% else %}
+                            {% if po.po_status != 'Reviewed' %}
+                                <button type="button" class="btn btn-success" style="font-size:12px; padding:4px 10px; margin-left: 4px;" onclick="alert('please review the purchase order before approving')">Approve</button>
+                            {% else %}
+                                <button type="button" class="btn btn-success" style="font-size:12px; padding:4px 10px; margin-left: 4px;" onclick="openApproveModal({{ po.po_id }})">Approve</button>
+                            {% endif %}
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- Generate PO PDF link -->
+                    <button type="button" onclick="openPdfPreviewModal({{ po.po_id }})" class="btn btn-primary" style="font-size:12px; padding:4px 10px; margin-left: 4px; background-color: #0d9488; border-color: #0d9488;">📄 Generate PO</button>
+
+                    <!-- View link -->
+                    <a href="/purchase-order/{{ po.po_id }}" class="btn btn-secondary" style="font-size:12px; padding:4px 10px; margin-left: 4px; text-decoration: none;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="8" style="text-align:center; color:#888; padding:40px;">No Purchase Orders found.</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Review Modal -->
+<div id="reviewModal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background-color: #fff; margin: auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 95%; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: left;">
+        <h2 style="font-size: 18px; font-weight: 700; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+            <span>📋 Review Purchase Order Details</span>
+            <button type="button" onclick="closeReviewModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #888;">&times;</button>
+        </h2>
+        
+        <div style="flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; height: 100%;">
+            <iframe id="pdfPreviewIframeReview" src="" style="width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #f1f5f9;"></iframe>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
+            <form method="POST" id="reviewForm" action="" style="display:inline;">
+                <button type="submit" class="btn btn-primary" style="padding: 10px 20px; font-weight: 600;">Confirm Review</button>
+            </form>
+            <button type="button" onclick="closeReviewModal()" class="btn btn-secondary" style="padding: 10px 20px;">Dismiss</button>
+        </div>
+    </div>
+</div>
+
+<!-- Approve Modal -->
+<div id="approveModal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background-color: #fff; margin: auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 95%; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: left;">
+        <h2 style="font-size: 18px; font-weight: 700; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+            <span>📋 Approve Purchase Order Details</span>
+            <button type="button" onclick="closeApproveModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #888;">&times;</button>
+        </h2>
+        
+        <div style="flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; height: 100%;">
+            <iframe id="pdfPreviewIframeApprove" src="" style="width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #f1f5f9;"></iframe>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
+            <form method="POST" id="approveForm" action="" style="display:inline;">
+                <button type="submit" class="btn btn-success" style="padding: 10px 20px; font-weight: 600;">Confirm Approval</button>
+            </form>
+            <button type="button" onclick="closeApproveModal()" class="btn btn-secondary" style="padding: 10px 20px;">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- PDF Preview Modal -->
+<div id="pdfPreviewModal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background-color: #fff; margin: auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 95%; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: left;">
+        <h2 style="font-size: 18px; font-weight: 700; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+            <span>📄 Purchase Order PDF Preview</span>
+            <button type="button" onclick="closePdfPreviewModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #888;">&times;</button>
+        </h2>
+        
+        <div style="flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; height: 100%;">
+            <iframe id="pdfPreviewIframe" src="" style="width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #f1f5f9;"></iframe>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
+            <button type="button" onclick="downloadPdf()" class="btn btn-primary" style="padding: 10px 20px; font-weight: 600; background-color: #0d9488; border-color: #0d9488;">Download PDF</button>
+            <button type="button" onclick="closePdfPreviewModal()" class="btn btn-secondary" style="padding: 10px 20px;">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentPoId = null;
+
+function openReviewModal(poId) {
+    document.getElementById('reviewForm').action = "/purchase-order/" + poId + "/review";
+    document.getElementById('pdfPreviewIframeReview').src = "/purchase-order/" + poId + "/po-pdf?mode=review";
+    document.getElementById('reviewModal').style.display = 'flex';
+}
+
+function closeReviewModal() {
+    document.getElementById('reviewModal').style.display = 'none';
+    document.getElementById('pdfPreviewIframeReview').src = '';
+}
+
+function openApproveModal(poId) {
+    document.getElementById('approveForm').action = "/purchase-order/" + poId + "/approve";
+    document.getElementById('pdfPreviewIframeApprove').src = "/purchase-order/" + poId + "/po-pdf?mode=approve";
+    document.getElementById('approveModal').style.display = 'flex';
+}
+
+function closeApproveModal() {
+    document.getElementById('approveModal').style.display = 'none';
+    document.getElementById('pdfPreviewIframeApprove').src = '';
+}
+
+function openPdfPreviewModal(poId) {
+    currentPoId = poId;
+    document.getElementById('pdfPreviewIframe').src = "/purchase-order/" + poId + "/po-pdf";
+    document.getElementById('pdfPreviewModal').style.display = 'flex';
+}
+
+function closePdfPreviewModal() {
+    document.getElementById('pdfPreviewModal').style.display = 'none';
+    document.getElementById('pdfPreviewIframe').src = '';
+    currentPoId = null;
+}
+
+function downloadPdf() {
+    if (!currentPoId) return;
+    window.open("/purchase-order/" + currentPoId + "/po-pdf", '_blank');
+}
+
+window.onclick = function(event) {
+    const rModal = document.getElementById('reviewModal');
+    const aModal = document.getElementById('approveModal');
+    const pModal = document.getElementById('pdfPreviewModal');
+    if (event.target == rModal) {
+        closeReviewModal();
+    }
+    if (event.target == aModal) {
+        closeApproveModal();
+    }
+    if (event.target == pModal) {
+        closePdfPreviewModal();
+    }
+}
+</script>
+{% endblock %}

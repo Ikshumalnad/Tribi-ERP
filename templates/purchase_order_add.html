@@ -1,0 +1,638 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb"><a href="/">Dashboard</a> / <a href="/purchase-order">Purchase orders</a> / New PO</div>
+
+<div class="page-header">
+    <h1>New Purchase Order</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('work-order')">📋 Refer to Work Orders</button>
+        <a href="/purchase-order" class="btn btn-secondary">← Back to List</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card" style="max-width: 900px; margin-bottom: 40px;">
+    <form method="post" action="/purchase-order/add">
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+            Primary Purchase Order Details
+        </h3>
+        
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+            <div class="form-group">
+                <label>PO Number</label>
+                <input type="text" value="{{ next_formatted_po }}" disabled style="background:#f4f6f9; color:#888;">
+                <input type="hidden" name="po_number" value="{{ next_po }}">
+            </div>
+
+            <div class="form-group">
+                <label>Vendor <span style="color:red;">*</span></label>
+                <select name="vendor_id" required onchange="onVendorChange()">
+                    <option value="">— Select Vendor —</option>
+                    {% for vendor in vendors %}
+                    <option value="{{ vendor.vendor_id }}">{{ vendor.short_name }} — {{ vendor.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Date Raised <span style="color:red;">*</span></label>
+                <input type="date" name="date_raised" value="{{ today }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Currency <span style="color:red;">*</span></label>
+                <select name="currency" required id="currencySelect" onchange="updateCurrencySymbols()">
+                    <option value="INR" selected>INR (₹)</option>
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="GBP">GBP (£)</option>
+                </select>
+            </div>
+        </div>
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+            Purchase Order Items
+            <button type="button" class="btn btn-success" style="font-size: 12px; padding: 4px 10px;" onclick="addItemRow()">+ Add Item</button>
+        </h3>
+
+        <div style="margin-bottom: 24px; overflow: visible;">
+            <table class="data-table" id="itemsTable">
+                <thead>
+                    <tr>
+                        <th style="width: 45%;">Item <span style="color:red;">*</span></th>
+                        <th style="width: 20%;">Qty <span style="color:red;">*</span></th>
+                        <th style="width: 20%;">Unit Price <span style="color:red;">*</span></th>
+                        <th style="width: 15%;">Unit <span style="color:red;">*</span></th>
+                        <th style="width: 40px;"></th>
+                    </tr>
+                </thead>
+                <tbody id="itemsTableBody">
+                    <!-- Javascript will insert rows here -->
+                </tbody>
+            </table>
+        </div>
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+            Terms & Conditions & Payment Terms
+        </h3>
+
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+            <!-- Terms & Conditions -->
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                    <input type="checkbox" id="modifyTermsCheckbox" onchange="toggleTermsAdd()">
+                    Modify terms and conditions
+                </label>
+                <div id="termsContainerAdd" style="display: none; margin-top: 10px;">
+                    <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Custom Terms (one per line):</label>
+                    <textarea name="custom_terms" id="customTermsTextarea" rows="6" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; font-family: sans-serif; resize: vertical; box-sizing: border-box;"></textarea>
+                </div>
+            </div>
+
+            <!-- Payment Terms -->
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                    <input type="checkbox" id="modifyPaymentTermsCheckbox" onchange="togglePaymentTermsAdd()">
+                    Modify payment terms
+                </label>
+                <div id="paymentTermsContainerAdd" style="display: none; margin-top: 10px; flex-direction: column; gap: 10px;">
+                    <div>
+                        <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Select Option:</label>
+                        <select id="paymentTermsSelectAdd" onchange="handlePaymentOptionChangeAdd()" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; background: #fff;">
+                            <option value="within">Within __ days</option>
+                            <option value="after">after receiving items</option>
+                            <option value="custom">custom payment terms</option>
+                        </select>
+                    </div>
+
+                    <div id="paymentDaysContainerAdd" style="display: block;">
+                        <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Number of Days:</label>
+                        <input type="number" id="paymentDaysInputAdd" min="0" value="30" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; box-sizing: border-box;" oninput="updatePaymentTermsHiddenAdd()">
+                    </div>
+
+                    <div id="customPaymentTermsContainerAdd" style="display: none;">
+                        <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Custom Payment Terms:</label>
+                        <input type="text" id="customPaymentTermsInputAdd" placeholder="e.g. 50% Advance, 50% on Delivery" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; box-sizing: border-box;" oninput="updatePaymentTermsHiddenAdd()">
+                    </div>
+
+                    <input type="hidden" name="payment_terms" id="paymentTermsHiddenAdd">
+                </div>
+            </div>
+        </div>
+
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
+            Additional Notes
+        </h3>
+
+        <div class="form-group">
+            <label>Remarks</label>
+            <textarea name="remarks" rows="3" placeholder="Enter any extra comments or remarks..."></textarea>
+        </div>
+
+        <div class="form-actions" style="display: flex; gap: 12px; margin-top: 24px;">
+            <button type="submit" class="btn btn-primary">Save Purchase Order</button>
+            <a href="/purchase-order" class="btn btn-secondary">Cancel</a>
+        </div>
+
+    </form>
+</div>
+
+<script>
+const defaultTermsText = "Subject to Bangalore Jurisdiction\nPurchase Order No. should be mentioned in all the supporting documents along with the supply of material\nTribi Item Code should be mentioned in all the supporting documents along with the supply of material";
+
+function toggleTermsAdd() {
+    const isChecked = document.getElementById('modifyTermsCheckbox').checked;
+    document.getElementById('termsContainerAdd').style.display = isChecked ? 'block' : 'none';
+    if (isChecked && !document.getElementById('customTermsTextarea').value) {
+        document.getElementById('customTermsTextarea').value = defaultTermsText;
+    }
+}
+
+function togglePaymentTermsAdd() {
+    const isChecked = document.getElementById('modifyPaymentTermsCheckbox').checked;
+    document.getElementById('paymentTermsContainerAdd').style.display = isChecked ? 'flex' : 'none';
+    updatePaymentTermsHiddenAdd();
+}
+
+function handlePaymentOptionChangeAdd() {
+    const opt = document.getElementById('paymentTermsSelectAdd').value;
+    document.getElementById('paymentDaysContainerAdd').style.display = (opt === 'within') ? 'block' : 'none';
+    document.getElementById('customPaymentTermsContainerAdd').style.display = (opt === 'custom') ? 'block' : 'none';
+    updatePaymentTermsHiddenAdd();
+}
+
+function updatePaymentTermsHiddenAdd() {
+    const isChecked = document.getElementById('modifyPaymentTermsCheckbox').checked;
+    if (!isChecked) {
+        document.getElementById('paymentTermsHiddenAdd').value = "";
+        return;
+    }
+    const opt = document.getElementById('paymentTermsSelectAdd').value;
+    if (opt === 'within') {
+        const days = document.getElementById('paymentDaysInputAdd').value || "0";
+        document.getElementById('paymentTermsHiddenAdd').value = "Within " + days + " days";
+    } else if (opt === 'after') {
+        document.getElementById('paymentTermsHiddenAdd').value = "after receiving items";
+    } else if (opt === 'custom') {
+        document.getElementById('paymentTermsHiddenAdd').value = document.getElementById('customPaymentTermsInputAdd').value || "";
+    }
+}
+</script>
+
+<style>
+.searchable-select-wrapper {
+    position: relative;
+    width: 100%;
+}
+.searchable-select-input {
+    background-color: #fff;
+    cursor: pointer;
+}
+.searchable-select-dropdown {
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    max-height: 200px;
+    overflow-y: auto;
+    border-radius: 6px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+}
+.searchable-select-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+}
+.searchable-select-item:hover {
+    background-color: #f1f5f9;
+}
+.searchable-select-nomatch {
+    padding: 8px 12px;
+    color: #94a3b8;
+    font-size: 13px;
+}
+#itemsTable, #itemsTable td {
+    overflow: visible !important;
+}
+</style>
+
+<script>
+const allVendors = {{ vendors | tojson }};
+const allItems = {{ items | tojson }};
+const vendorItemsData = {{ vendor_items | tojson }};
+const unitsData = {{ units | tojson }};
+
+// Map item_id to vendors who supply it
+const itemVendorsData = {};
+allVendors.forEach(vendor => {
+    const vId = vendor.vendor_id;
+    if (vendorItemsData[vId]) {
+        vendorItemsData[vId].forEach(item => {
+            if (!itemVendorsData[item.item_id]) {
+                itemVendorsData[item.item_id] = [];
+            }
+            itemVendorsData[item.item_id].push({
+                vendor_id: vendor.vendor_id,
+                short_name: vendor.short_name,
+                full_name: vendor.full_name
+            });
+        });
+    }
+});
+
+// Custom Searchable Dropdown Component
+function initSearchableSelect(selectEl, placeholder = "Search...") {
+    if (selectEl.dataset.searchableInitialized) {
+        // If already initialized, just refresh options
+        selectEl.dispatchEvent(new Event('refreshCustomSelect'));
+        return;
+    }
+    selectEl.dataset.searchableInitialized = "true";
+    
+    // Create wrapper
+    const wrapper = document.createElement('div');
+    wrapper.className = 'searchable-select-wrapper';
+    wrapper.style.position = 'relative';
+    wrapper.style.width = '100%';
+    
+    // Hide original select (but keep it in DOM for validation)
+    selectEl.style.display = 'none';
+    selectEl.parentNode.insertBefore(wrapper, selectEl);
+    wrapper.appendChild(selectEl);
+    
+    // Create input
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'searchable-select-input';
+    input.placeholder = placeholder;
+    input.autocomplete = 'off';
+    input.required = selectEl.required;
+    input.style.width = '100%';
+    input.style.padding = '8px 12px';
+    input.style.border = '1px solid #cbd5e1';
+    input.style.borderRadius = '6px';
+    input.style.fontSize = '14px';
+    input.style.boxSizing = 'border-box';
+    wrapper.appendChild(input);
+    
+    // Create dropdown container
+    const dropdown = document.createElement('div');
+    dropdown.className = 'searchable-select-dropdown';
+    dropdown.style.position = 'absolute';
+    dropdown.style.top = '100%';
+    dropdown.style.left = '0';
+    dropdown.style.width = '100%';
+    dropdown.style.maxHeight = '200px';
+    dropdown.style.overflowY = 'auto';
+    dropdown.style.background = '#ffffff';
+    dropdown.style.border = '1px solid #cbd5e1';
+    dropdown.style.borderRadius = '6px';
+    dropdown.style.marginTop = '4px';
+    dropdown.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.1)';
+    dropdown.style.zIndex = '1000';
+    dropdown.style.display = 'none';
+    wrapper.appendChild(dropdown);
+    
+    // Function to populate/refresh dropdown options
+    function refreshOptions() {
+        dropdown.innerHTML = '';
+        const options = Array.from(selectEl.options);
+        
+        options.forEach(opt => {
+            if (opt.value === "") return; // skip placeholder
+            const item = document.createElement('div');
+            item.className = 'searchable-select-item';
+            item.innerText = opt.text;
+            item.dataset.value = opt.value;
+            item.style.padding = '8px 12px';
+            item.style.cursor = 'pointer';
+            item.style.fontSize = '13px';
+            item.style.transition = 'background 0.2s';
+            
+            item.addEventListener('mouseenter', () => {
+                item.style.background = '#f1f5f9';
+            });
+            item.addEventListener('mouseleave', () => {
+                item.style.background = 'transparent';
+            });
+            
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectEl.value = opt.value;
+                input.value = opt.text;
+                dropdown.style.display = 'none';
+                
+                // Trigger change event
+                selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                if (typeof selectEl.onchange === 'function') {
+                    selectEl.onchange();
+                }
+            });
+            
+            dropdown.appendChild(item);
+        });
+        
+        // Update input display
+        const activeOpt = selectEl.options[selectEl.selectedIndex];
+        if (activeOpt && activeOpt.value !== "") {
+            input.value = activeOpt.text;
+        } else {
+            input.value = '';
+        }
+    }
+    
+    // Initialize options
+    refreshOptions();
+    
+    // Listen for select element change externally
+    selectEl.addEventListener('refreshCustomSelect', () => {
+        refreshOptions();
+    });
+    
+    // Toggle dropdown
+    input.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Close all other dropdowns
+        document.querySelectorAll('.searchable-select-dropdown').forEach(d => {
+            if (d !== dropdown) d.style.display = 'none';
+        });
+        const opening = dropdown.style.display === 'none';
+        dropdown.style.display = opening ? 'block' : 'none';
+        
+        if (opening) {
+            // Show all items initially on click to allow changing selection easily
+            filterItems("");
+            input.select();
+        }
+    });
+    
+    // Search filter logic
+    function filterItems(searchText) {
+        const items = dropdown.querySelectorAll('.searchable-select-item');
+        const search = searchText.toLowerCase();
+        let visibleCount = 0;
+        
+        items.forEach(item => {
+            const text = item.innerText.toLowerCase();
+            if (text.includes(search)) {
+                item.style.display = 'block';
+                visibleCount++;
+            } else {
+                item.style.display = 'none';
+            }
+        });
+        
+        if (visibleCount === 0 && search !== "") {
+            let noMatch = dropdown.querySelector('.searchable-select-nomatch');
+            if (!noMatch) {
+                noMatch = document.createElement('div');
+                noMatch.className = 'searchable-select-nomatch';
+                noMatch.innerText = 'No matches found';
+                noMatch.style.padding = '8px 12px';
+                noMatch.style.color = '#94a3b8';
+                noMatch.style.fontSize = '13px';
+                dropdown.appendChild(noMatch);
+            }
+        } else {
+            const noMatch = dropdown.querySelector('.searchable-select-nomatch');
+            if (noMatch) noMatch.remove();
+        }
+    }
+    
+    input.addEventListener('input', () => {
+        dropdown.style.display = 'block';
+        filterItems(input.value);
+        
+        if (selectEl.name === 'vendor_id') {
+            const val = input.value.trim();
+            if (val !== '') {
+                let opt = Array.from(selectEl.options).find(o => o.value === val || o.text === val);
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = val;
+                    opt.text = val;
+                    selectEl.appendChild(opt);
+                }
+                selectEl.value = opt.value;
+            }
+        }
+    });
+    
+    // Close dropdown on click outside
+    document.addEventListener('click', () => {
+        dropdown.style.display = 'none';
+        const activeOpt = selectEl.options[selectEl.selectedIndex];
+        if (activeOpt && activeOpt.value !== "") {
+            input.value = activeOpt.text;
+        } else if (selectEl.name === 'vendor_id' && input.value.trim() !== '') {
+            const val = input.value.trim();
+            let opt = Array.from(selectEl.options).find(o => o.value === val || o.text === val);
+            if (!opt) {
+                opt = document.createElement('option');
+                opt.value = val;
+                opt.text = val;
+                selectEl.appendChild(opt);
+            }
+            selectEl.value = opt.value;
+        } else {
+            input.value = '';
+        }
+    });
+}
+
+function restoreAllVendors() {
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    if (!vendorSelect) return;
+    
+    const currentVal = vendorSelect.value;
+    
+    let options = '<option value="">— Select Vendor —</option>';
+    allVendors.forEach(vendor => {
+        const selected = vendor.vendor_id == currentVal ? 'selected' : '';
+        options += `<option value="${vendor.vendor_id}" ${selected}>${vendor.short_name} — ${vendor.full_name}</option>`;
+    });
+    if (currentVal && !allVendors.some(v => v.vendor_id == currentVal)) {
+        options += `<option value="${currentVal}" selected>${currentVal}</option>`;
+    }
+    vendorSelect.innerHTML = options;
+    vendorSelect.dispatchEvent(new Event('refreshCustomSelect'));
+}
+
+function updateVendorDropdownOptions() {
+    restoreAllVendors();
+}
+
+function validateAndRecalculate(changedSelect) {
+    restoreAllVendors();
+    return true;
+}
+
+function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
+    const tbody = document.getElementById('itemsTableBody');
+    const rowId = 'row-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+    
+    const tr = document.createElement('tr');
+    tr.id = rowId;
+    
+    // Always include all items in the item dropdown
+    let itemOptions = '<option value="">— Select Item —</option>';
+    allItems.forEach(item => {
+        const selected = item.item_id == itemId ? 'selected' : '';
+        itemOptions += `<option value="${item.item_id}" ${selected} data-unit-id="${item.unit_id}">${item.item_code} — ${item.desc || ''}</option>`;
+    });
+    
+    // Unit select options
+    let unitOptions = '<option value="">— Select Unit —</option>';
+    unitsData.forEach(unit => {
+        const selected = unit.unit_id == unitId ? 'selected' : '';
+        unitOptions += `<option value="${unit.unit_id}" ${selected}>${unit.unit_short_name}</option>`;
+    });
+    
+    const currencySelect = document.getElementById('currencySelect');
+    const currentCurrency = currencySelect ? currencySelect.value : 'INR';
+    const currencySymbols = {
+        'INR': '₹',
+        'USD': '$',
+        'EUR': '€',
+        'GBP': '£'
+    };
+    const symbol = currencySymbols[currentCurrency] || '₹';
+
+    tr.innerHTML = `
+        <td>
+            <select name="item_id[]" required style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;" onchange="onItemChange(this)">
+                ${itemOptions}
+            </select>
+        </td>
+        <td>
+            <input type="number" name="qty_ordered[]" step="0.001" min="0.001" required value="${qty}" placeholder="0.000" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+        </td>
+        <td>
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <span class="currency-symbol" style="font-weight: bold; color: #4a5568;">${symbol}</span>
+                <input type="number" name="unit_price[]" step="0.001" min="0.000" required value="${price}" placeholder="0.000" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+            </div>
+        </td>
+        <td>
+            <select name="unit_id[]" required style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                ${unitOptions}
+            </select>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn btn-danger" style="padding: 4px 10px; font-size: 14px; font-weight: 600;" onclick="removeRow('${rowId}')">&times;</button>
+        </td>
+    `;
+    
+    tbody.appendChild(tr);
+    
+    const itemSelect = tr.querySelector('select[name="item_id[]"]');
+    initSearchableSelect(itemSelect, "Search Item...");
+    if (itemId) {
+        onItemChange(itemSelect);
+    }
+}
+
+function updateCurrencySymbols() {
+    const select = document.getElementById('currencySelect');
+    if (!select) return;
+    const currency = select.value;
+    const currencySymbols = {
+        'INR': '₹',
+        'USD': '$',
+        'EUR': '€',
+        'GBP': '£'
+    };
+    const symbol = currencySymbols[currency] || '₹';
+    document.querySelectorAll('.currency-symbol').forEach(span => {
+        span.innerText = symbol;
+    });
+}
+
+function onItemChange(selectElement) {
+    const itemId = selectElement.value;
+    if (!itemId) return;
+    
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    const vendorId = vendorSelect ? vendorSelect.value : '';
+    const row = selectElement.closest('tr');
+    
+    if (vendorId) {
+        fetch(`/purchase-order/get-vendor-pricing?vendor_id=${vendorId}&item_id=${itemId}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    if (data.qty !== null && data.qty !== undefined && data.qty > 0) {
+                        const qtyInput = row.querySelector('input[name="qty_ordered[]"]');
+                        if (qtyInput && !qtyInput.value) qtyInput.value = data.qty;
+                    }
+                    if (data.price !== null && data.price !== undefined) {
+                        const priceInput = row.querySelector('input[name="unit_price[]"]');
+                        if (priceInput) priceInput.value = data.price;
+                    }
+                    if (data.unit_id) {
+                        const unitSelect = row.querySelector('select[name="unit_id[]"]');
+                        if (unitSelect) unitSelect.value = data.unit_id;
+                    }
+                } else {
+                    fallbackToDefaultUnit(selectElement);
+                }
+            })
+            .catch(err => {
+                console.error("Error fetching pricing:", err);
+                fallbackToDefaultUnit(selectElement);
+            });
+    } else {
+        fallbackToDefaultUnit(selectElement);
+    }
+}
+
+function fallbackToDefaultUnit(selectElement) {
+    const selectedOption = selectElement.options[selectElement.selectedIndex];
+    if (!selectedOption) return;
+    const unitId = selectedOption.getAttribute('data-unit-id');
+    if (unitId) {
+        const row = selectElement.closest('tr');
+        const unitSelect = row.querySelector('select[name="unit_id[]"]');
+        if (unitSelect && (!unitSelect.value || unitSelect.value === '')) {
+            unitSelect.value = unitId;
+        }
+    }
+}
+
+function onVendorChange() {
+    restoreAllVendors();
+    const itemSelects = document.querySelectorAll('select[name="item_id[]"]');
+    itemSelects.forEach(select => {
+        if (select.value !== "") {
+            onItemChange(select);
+        }
+    });
+}
+
+function removeRow(rowId) {
+    const row = document.getElementById(rowId);
+    if (row) {
+        row.remove();
+        validateAndRecalculate();
+    }
+}
+
+if (window.location.search.includes('reference=1')) {
+    document.documentElement.classList.add('in-reference-mode');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    if (vendorSelect) {
+        initSearchableSelect(vendorSelect, "Search Vendor...");
+    }
+    addItemRow();
+});
+</script>
+{% endblock %}

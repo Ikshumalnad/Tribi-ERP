@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set symbol = '₹' %}
+{% if po.currency == 'USD' %}{% set symbol = '$' %}
+{% elif po.currency == 'EUR' %}{% set symbol = '€' %}
+{% elif po.currency == 'GBP' %}{% set symbol = '£' %}
+{% endif %}
+
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/purchase-order">Purchase orders</a> / {{ po.formatted_po_number }}
+</div>
+<div class="page-header">
+    <h1>Purchase Order: {{ po.formatted_po_number }}</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('work-order')">📋 Refer to Work Orders</button>
+        
+        <!-- Lock/Unlock action -->
+        <form method="POST" action="/purchase-order/{{ po.po_id }}/{% if po.is_locked %}unlock{% else %}lock{% endif %}" style="display:inline;">
+            <button type="submit" class="btn {% if po.is_locked %}btn-dark{% else %}btn-secondary{% endif %}" style="min-width: 80px;">
+                {% if po.is_locked %}Unlock{% else %}Lock{% endif %}
+            </button>
+        </form>
+
+        <!-- Review / Amend / Modify button -->
+        {% if po.is_locked %}
+            {% if po.po_status in ['Draft', 'Open'] %}
+                <button type="button" class="btn btn-primary" onclick="openReviewModal()">Review</button>
+            {% elif po.po_status == 'Reviewed' %}
+                <button type="button" class="btn btn-primary" disabled style="opacity: 0.65; cursor: not-allowed;">Reviewed</button>
+            {% endif %}
+        {% else %}
+            {% set ver_num = (po.po_version_number | float | int) if po.po_version_number else 0 %}
+            {% if po.po_status == 'Approved' or ver_num > 0 %}
+                <a href="/purchase-order/{{ po.po_id }}/edit" class="btn btn-warning" style="text-decoration: none;">Amend</a>
+            {% else %}
+                <a href="/purchase-order/{{ po.po_id }}/edit" class="btn btn-warning" style="text-decoration: none; background-color: #3182ce; border-color: #3182ce;">Modify</a>
+            {% endif %}
+        {% endif %}
+
+        <!-- Approve button -->
+        {% if po.po_status == 'Approved' %}
+            <button type="button" class="btn btn-success" disabled style="opacity: 0.65; cursor: not-allowed;">Approved</button>
+        {% else %}
+            {% if not po.is_locked %}
+                <button type="button" class="btn btn-success" onclick="alert('please lock the purchase order to review it')">Approve</button>
+            {% else %}
+                {% if po.po_status != 'Reviewed' %}
+                    <button type="button" class="btn btn-success" onclick="alert('please review the purchase order before approving')">Approve</button>
+                {% else %}
+                    <button type="button" class="btn btn-success" onclick="openApproveModal()">Approve</button>
+                {% endif %}
+            {% endif %}
+        {% endif %}
+        
+        <button type="button" onclick="openPdfPreviewModal()" class="btn btn-primary" style="background-color: #0d9488; border-color: #0d9488;">📄 Generate PO</button>
+        <a href="/purchase-order" class="btn btn-secondary">← Back to List</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<!-- Info Cards Grid -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+    
+    <!-- PO Header Info Card -->
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:24px;">
+        <h3 style="font-size:14px; font-weight:600; color:#1a2e4a; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:18px; border-bottom: 1px solid #eee; padding-bottom: 6px;">
+            PO Information
+        </h3>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-size:14px; line-height: 1.6;">
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">PO Number</div>
+                <div style="font-weight:600;">{{ po.formatted_po_number }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Version Number</div>
+                <div>{{ po.po_version_number or '1.0' }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Status</div>
+                <span class="badge {% if po.po_status == 'Draft' %}badge-reopened{% elif po.po_status == 'Open' %}badge-open{% elif po.po_status == 'Reviewed' %}badge-inprogress{% elif po.po_status == 'Approved' %}badge-active{% elif po.po_status == 'Cancelled' %}badge-cancelled{% elif po.po_status == 'Closed' %}badge-closed{% else %}badge-open{% endif %}">
+                    {{ po.po_status or 'Open' }}
+                </span>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Date Raised</div>
+                <div>{{ po.date_raised or '—' }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Raised By</div>
+                <div>{{ po.raised_by or '—' }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Vendor Details Card -->
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:24px;">
+        <h3 style="font-size:14px; font-weight:600; color:#1a2e4a; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:18px; border-bottom: 1px solid #eee; padding-bottom: 6px;">
+            Vendor Details
+        </h3>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-size:14px; line-height: 1.6;">
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Short Name</div>
+                <div style="font-weight:600;">{{ po.vendor_name }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Full Name</div>
+                <div>{{ po.vendor_full_name }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">GST Number</div>
+                <div><code>{{ po.gst_no or '—' }}</code></div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Phone Number</div>
+                <div>{{ po.ph_no or '—' }}</div>
+            </div>
+            <div style="grid-column: span 2;">
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Address</div>
+                <div>
+                    {{ po.address_line_1 or '' }}{% if po.city %}, {{ po.city }}{% endif %}{% if po.pincode %} - {{ po.pincode }}{% endif %}{% if po.country %}, {{ po.country }}{% endif %}
+                    {% if not po.address_line_1 and not po.city and not po.country %}—{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Review, Approval & Cancellation Details -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+    
+    <!-- Review & Approval Details Card -->
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:24px;">
+        <h3 style="font-size:14px; font-weight:600; color:#1a2e4a; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:18px; border-bottom: 1px solid #eee; padding-bottom: 6px;">
+            Review & Approval
+        </h3>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-size:14px; line-height: 1.6;">
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Reviewed By</div>
+                <div>{{ po.reviewed_by or '—' }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Reviewed Date</div>
+                <div>{{ po.reviewed_date or '—' }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Approved By</div>
+                <div>{{ po.approved_by or '—' }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.5px;">Approved Date</div>
+                <div>{{ po.approved_date or '—' }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cancellation details (if cancelled) -->
+    {% if po.po_status == 'Cancelled' %}
+    <div style="background:#fff5f5; border:1px solid #fed7d7; border-radius:10px; padding:24px;">
+        <h3 style="font-size:14px; font-weight:600; color:#c53030; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:18px; border-bottom: 1px solid #fed7d7; padding-bottom: 6px;">
+            Cancellation Info
+        </h3>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-size:14px; line-height: 1.6;">
+            <div>
+                <div style="font-size:11px; color:#9b2c2c; text-transform:uppercase; letter-spacing:0.5px;">Cancelled By</div>
+                <div style="font-weight:600; color:#9b2c2c;">{{ po.cancelled_by or '—' }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#9b2c2c; text-transform:uppercase; letter-spacing:0.5px;">Cancel Type</div>
+                <div style="color:#9b2c2c;">{{ po.cancel_type or '—' }}</div>
+            </div>
+            <div style="grid-column: span 2;">
+                <div style="font-size:11px; color:#9b2c2c; text-transform:uppercase; letter-spacing:0.5px;">Cancelled At</div>
+                <div style="color:#9b2c2c;">{{ po.cancelled_at or '—' }}</div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:10px; padding:24px; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:13px;">
+        No cancellation records active for this Purchase Order.
+    </div>
+    {% endif %}
+
+</div>
+
+<!-- Remarks Card -->
+<div style="background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:24px; margin-bottom: 24px;">
+    <h3 style="font-size:14px; font-weight:600; color:#1a2e4a; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px; border-bottom: 1px solid #eee; padding-bottom: 6px;">
+        Remarks / Notes
+    </h3>
+    <div style="font-size:14px; color:#333; line-height: 1.6; white-space: pre-wrap;">{{ po.remarks or 'No remarks added.' }}</div>
+</div>
+
+<!-- PO Items Table Card -->
+<div style="background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:24px; margin-bottom:40px;">
+    <h3 style="font-size:14px; font-weight:600; color:#1a2e4a; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:18px; border-bottom: 1px solid #eee; padding-bottom: 6px;">
+        Purchase Order Items
+    </h3>
+    <div style="overflow-x:auto;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Item Code</th>
+                    <th>Description</th>
+                    <th style="text-align: right;">Qty Ordered</th>
+                    <th style="text-align: right;">Unit Price</th>
+                    <th style="text-align: right;">Total Price</th>
+                    <th>Unit</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if po_items %}
+                    {% for item in po_items %}
+                    <tr>
+                        <td><strong>{{ item.item_code }}</strong></td>
+                        <td>{{ item.item_desc or '—' }}</td>
+                        <td style="text-align: right;">{{ item.qty_ordered }}</td>
+                        <td style="text-align: right;">{{ symbol }}{{ "%.3f"|format(item.unit_price) }}</td>
+                        <td style="text-align: right; font-weight: 600;">{{ symbol }}{{ "%.2f"|format(item.qty_ordered * item.unit_price) }}</td>
+                        <td>{{ item.unit }}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr><td colspan="6" style="text-align:center; color:#888; padding:20px;">No items in this purchase order.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Review Modal -->
+<div id="reviewModal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background-color: #fff; margin: auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 95%; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: left;">
+        <h2 style="font-size: 18px; font-weight: 700; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+            <span>📋 Review Purchase Order Details</span>
+            <button type="button" onclick="closeReviewModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #888;">&times;</button>
+        </h2>
+        
+        <div style="flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; height: 100%;">
+            <iframe id="pdfPreviewIframeReview" src="" style="width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #f1f5f9;"></iframe>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
+            <form method="POST" action="/purchase-order/{{ po.po_id }}/review" style="display:inline;">
+                <button type="submit" class="btn btn-primary" style="padding: 10px 20px; font-weight: 600;">Confirm Review</button>
+            </form>
+            <button type="button" onclick="closeReviewModal()" class="btn btn-secondary" style="padding: 10px 20px;">Dismiss</button>
+        </div>
+    </div>
+</div>
+
+<!-- Approve Modal -->
+<div id="approveModal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background-color: #fff; margin: auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 95%; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: left;">
+        <h2 style="font-size: 18px; font-weight: 700; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+            <span>📋 Approve Purchase Order Details</span>
+            <button type="button" onclick="closeApproveModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #888;">&times;</button>
+        </h2>
+        
+        <div style="flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; height: 100%;">
+            <iframe id="pdfPreviewIframeApprove" src="" style="width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #f1f5f9;"></iframe>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
+            <form method="POST" action="/purchase-order/{{ po.po_id }}/approve" style="display:inline;">
+                <button type="submit" class="btn btn-success" style="padding: 10px 20px; font-weight: 600;">Confirm Approval</button>
+            </form>
+            <button type="button" onclick="closeApproveModal()" class="btn btn-secondary" style="padding: 10px 20px;">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- PDF Preview Modal -->
+<div id="pdfPreviewModal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+    <div style="background-color: #fff; margin: auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 95%; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: left;">
+        <h2 style="font-size: 18px; font-weight: 700; color: #1a2e4a; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+            <span>📄 Purchase Order PDF Preview</span>
+            <button type="button" onclick="closePdfPreviewModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #888;">&times;</button>
+        </h2>
+        
+        <div style="flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; height: 100%;">
+            <iframe id="pdfPreviewIframe" src="" style="width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #f1f5f9;"></iframe>
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
+            <button type="button" onclick="downloadPdf()" class="btn btn-primary" style="padding: 10px 20px; font-weight: 600; background-color: #0d9488; border-color: #0d9488;">Download PDF</button>
+            <button type="button" onclick="closePdfPreviewModal()" class="btn btn-secondary" style="padding: 10px 20px;">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function openReviewModal() {
+    document.getElementById('pdfPreviewIframeReview').src = "/purchase-order/{{ po.po_id }}/po-pdf?mode=review";
+    document.getElementById('reviewModal').style.display = 'flex';
+}
+
+function closeReviewModal() {
+    document.getElementById('reviewModal').style.display = 'none';
+    document.getElementById('pdfPreviewIframeReview').src = '';
+}
+
+function openApproveModal() {
+    document.getElementById('pdfPreviewIframeApprove').src = "/purchase-order/{{ po.po_id }}/po-pdf?mode=approve";
+    document.getElementById('approveModal').style.display = 'flex';
+}
+
+function closeApproveModal() {
+    document.getElementById('approveModal').style.display = 'none';
+    document.getElementById('pdfPreviewIframeApprove').src = '';
+}
+
+function openPdfPreviewModal() {
+    document.getElementById('pdfPreviewIframe').src = "/purchase-order/{{ po.po_id }}/po-pdf";
+    document.getElementById('pdfPreviewModal').style.display = 'flex';
+}
+
+function closePdfPreviewModal() {
+    document.getElementById('pdfPreviewModal').style.display = 'none';
+    document.getElementById('pdfPreviewIframe').src = '';
+}
+
+function downloadPdf() {
+    window.open("/purchase-order/{{ po.po_id }}/po-pdf", '_blank');
+}
+
+window.onclick = function(event) {
+    const rModal = document.getElementById('reviewModal');
+    const aModal = document.getElementById('approveModal');
+    const pModal = document.getElementById('pdfPreviewModal');
+    if (event.target == rModal) {
+        closeReviewModal();
+    }
+    if (event.target == aModal) {
+        closeApproveModal();
+    }
+    if (event.target == pModal) {
+        closePdfPreviewModal();
+    }
+}
+</script>
+{% endblock %}
