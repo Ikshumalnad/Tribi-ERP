@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
+import os
 import mysql.connector
 from datetime import date
 from flask import g  # to prevent database timeout
@@ -8,7 +9,7 @@ import csv
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = 'tribi_secret_key'
+app.secret_key = os.environ.get('SECRET_KEY', 'tribi_secret_key')
 
 _grn_schema_checked = False
 
@@ -18,10 +19,11 @@ def ensure_grn_schema():
         return
     try:
         conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="admin",
-            database="tribi_db"
+            host=os.environ.get("DB_HOST", "localhost"),
+            port=int(os.environ.get("DB_PORT", 3306)),
+            user=os.environ.get("DB_USER", "root"),
+            password=os.environ.get("DB_PASSWORD", "admin"),
+            database=os.environ.get("DB_NAME", "tribi_db")
         )
         cursor = conn.cursor(dictionary=True)
         
@@ -65,10 +67,11 @@ def get_db():
     ensure_grn_schema()
     # to prevent database timeout
     conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="admin",
-        database="tribi_db"
+        host=os.environ.get("DB_HOST", "localhost"),
+        port=int(os.environ.get("DB_PORT", 3306)),    
+        user=os.environ.get("DB_USER", "root"),
+        password=os.environ.get("DB_PASSWORD", "admin"),
+        database=os.environ.get("DB_NAME", "tribi_db")
     )
     # to prevent database timeout
     setup_cursor = conn.cursor()
