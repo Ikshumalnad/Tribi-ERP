@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/hsn">HSN Codes</a> / Import
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Import HSN Codes</h1>
+    <a href="/hsn" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if not preview %}
+<div class="form-card">
+    <div class="alert" style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155; line-height:1.6;">
+        One HSN code per row. The first row names the columns.
+        <div style="margin-top:10px; font-size:13px;">
+            Recognised headings — <code>hsn_code</code>, <code>description</code>,
+            <code>tax_rate</code>, <code>cgst</code>, <code>sgst</code>,
+            <code>igst</code>, <code>tax_date_from</code>, <code>tax_date_to</code>,
+            and optionally <code>item_code</code>. Spelling is matched loosely,
+            so <code>GST Rate</code> and <code>Rate</code> both work, and
+            <code>18%</code> is read as 18.
+        </div>
+        <div style="margin-top:10px; font-size:13px; color:#64748b;">
+            <strong>If you give only the total rate</strong>, cgst and sgst are
+            filled as half each and igst as the whole — the same pattern as the
+            codes already in this database. Give the columns explicitly to
+            override that.
+        </div>
+        <div style="margin-top:10px; font-size:13px; color:#64748b;">
+            <strong><code>item_code</code> is worth including.</strong> An HSN code
+            on its own is just a tax rate on a list; the application finds an
+            item's rate through the link between them.
+        </div>
+        <div style="margin-top:10px; font-size:13px; color:#64748b;">
+            Codes are matched on <strong>hsn_code</strong>. An existing one is
+            updated rather than duplicated, and a blank cell never wipes a value
+            already on record. Nothing is written until you confirm.
+        </div>
+    </div>
+
+    <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="stage" value="preview">
+        <div class="form-group">
+            <label style="font-weight:600;">HSN file <span class="required">*</span></label>
+            <input type="file" name="file" accept=".xlsx,.xls" required class="input-field">
+        </div>
+        <button type="submit" class="btn-primary" style="padding:9px 22px; font-weight:600;">
+            Read the file
+        </button>
+    </form>
+</div>
+
+{% else %}
+
+<div class="detail-card" style="margin-bottom:18px;">
+    <div class="detail-grid">
+        <div><span class="detail-label">File</span><strong>{{ filename }}</strong></div>
+        <div><span class="detail-label">Sheet</span>{{ meta.sheet }}</div>
+        <div><span class="detail-label">Header row</span>{{ meta.header_row }}</div>
+        <div><span class="detail-label">Codes in file</span><strong>{{ preview.total_rows }}</strong></div>
+    </div>
+</div>
+
+<div class="alert" style="background:#f0fdf4; border:1px solid #86efac; color:#166534;">
+    <strong>{{ preview.new_codes|length }}</strong> new HSN code(s),
+    <strong>{{ preview.existing_codes|length }}</strong> already on record.
+    {% if preview.items_named %}
+    <div style="margin-top:6px; font-size:13px;">
+        {{ preview.items_named }} row(s) name an item, and will link it to its HSN code.
+    </div>
+    {% endif %}
+    {% if meta.skipped_no_code %}
+    <div style="margin-top:6px; font-size:13px;">
+        {{ meta.skipped_no_code }} row(s) had no HSN code and were ignored.
+    </div>
+    {% endif %}
+</div>
+
+{% if preview.tax_mismatches %}
+<div class="alert" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b;">
+    <strong>The tax figures do not add up on {{ preview.tax_mismatches|length }} row(s).</strong>
+    CGST plus SGST is what a customer in this state pays; IGST is what one
+    outside it pays. Both should come to the rate on the line.
+    <div style="margin-top:8px; font-size:13px;">
+        {% for m in preview.tax_mismatches[:15] %}
+        <div><code>{{ m.hsn_code }}</code> — {{ m.why }}</div>
+        {% endfor %}
+        {% if preview.tax_mismatches|length > 15 %}
+        <div>and {{ preview.tax_mismatches|length - 15 }} more.</div>
+        {% endif %}
+    </div>
+    <div style="margin-top:8px; font-size:13px;">
+        These import as written. A wrong rate here becomes a wrong figure on
+        every purchase order that uses the code, so it is worth settling first.
+    </div>
+</div>
+{% endif %}
+
+{% if preview.already_duplicated_in_db %}
+<div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>These codes already appear more than once in the database.</strong>
+    The import will update the lowest-numbered one, which may not be the one
+    in use:
+    <div style="margin-top:6px; font-size:13px;">
+        {% for c in preview.already_duplicated_in_db %}<code>{{ c }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    <div style="margin-top:6px; font-size:13px;">
+        The unique index on <code>hsn_code</code> was dropped at some point, so
+        duplicates are possible. Worth tidying separately.
+    </div>
+</div>
+{% endif %}
+
+{% if preview.duplicates_in_file %}
+<div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>The same code appears more than once in the file.</strong>
+    The last row wins.
+    <div style="margin-top:6px; font-size:13px;">
+        {% for code, n in preview.duplicates_in_file.items() %}<code>{{ code }}</code> ×{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if preview.rows_without_a_rate %}
+<div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>{{ preview.rows_without_a_rate|length }} row(s) carry no tax rate at all.</strong>
+    They import with the rate left empty, which means any purchase order using
+    them calculates no tax:
+    <code>{{ preview.rows_without_a_rate[:10]|join('</code>, <code>')|safe }}</code>{% if preview.rows_without_a_rate|length > 10 %} and {{ preview.rows_without_a_rate|length - 10 }} more{% endif %}.
+</div>
+{% endif %}
+
+{% if preview.items_not_found %}
+<div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>{{ preview.items_not_found|length }} item code(s) named in the file do not exist.</strong>
+    Those HSN codes still import; the link is simply not made:
+    <code>{{ preview.items_not_found[:10]|join('</code>, <code>')|safe }}</code>{% if preview.items_not_found|length > 10 %} and {{ preview.items_not_found|length - 10 }} more{% endif %}.
+</div>
+{% endif %}
+
+{% if meta.unmapped_headings %}
+<div class="alert" style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155;">
+    Headings that matched nothing and were skipped:
+    <code>{{ meta.unmapped_headings|join('</code>, <code>')|safe }}</code>
+</div>
+{% endif %}
+
+{% if preview.existing_codes %}
+<h3 style="font-size:15px; margin:20px 0 8px; color:#1a2e4a;">Already on record</h3>
+<div class="table-wrapper">
+    <table class="data-table" style="font-size:13px;">
+        <thead><tr><th style="width:130px;">HSN code</th><th>What changes</th></tr></thead>
+        <tbody>
+        {% for h in preview.existing_codes %}
+            <tr>
+                <td><strong>{{ h.hsn_code }}</strong></td>
+                <td>
+                    {% if h.changes %}
+                        {% for c in h.changes %}
+                        <div><code>{{ c.field }}</code>:
+                            <span style="color:#78716c;">{{ c.was }}</span> →
+                            <strong>{{ c.now }}</strong></div>
+                        {% endfor %}
+                    {% else %}
+                        <span style="color:#94a3b8;">nothing — the file matches what is on record</span>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<h3 style="font-size:15px; margin:20px 0 8px; color:#1a2e4a;">
+    First {{ rows|length }} row(s) as read
+</h3>
+<div class="table-wrapper">
+    <table class="data-table" style="font-size:12px;">
+        <thead>
+            <tr>
+                <th>HSN code</th><th>Description</th>
+                <th style="text-align:right;">Rate</th>
+                <th style="text-align:right;">CGST</th>
+                <th style="text-align:right;">SGST</th>
+                <th style="text-align:right;">IGST</th>
+                <th>From</th><th>To</th><th>Item</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+            <tr>
+                <td><strong>{{ r.hsn_code }}</strong></td>
+                <td>{{ r.description or '—' }}</td>
+                <td style="text-align:right;">{{ r.tax_rate if r.tax_rate is not none else '—' }}</td>
+                <td style="text-align:right;">{{ r.cgst if r.cgst is not none else '—' }}</td>
+                <td style="text-align:right;">{{ r.sgst if r.sgst is not none else '—' }}</td>
+                <td style="text-align:right;">{{ r.igst if r.igst is not none else '—' }}</td>
+                <td>{{ r.tax_date_from or 'today' }}</td>
+                <td>{{ r.tax_date_to or '—' }}</td>
+                <td>{{ r.item_code or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<form method="post" style="margin-top:22px;">
+    <input type="hidden" name="stage" value="confirm">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <button type="submit" class="btn-primary" style="padding:10px 26px; font-weight:600;">
+        Import {{ preview.total_rows }} HSN code(s)
+    </button>
+    <a href="/hsn/import" class="btn-outline" style="padding:10px 20px; margin-left:8px;">Choose a different file</a>
+</form>
+
+{% endif %}
+{% endblock %}

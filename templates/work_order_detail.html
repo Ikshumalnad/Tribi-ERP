@@ -1,0 +1,844 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="breadcrumb"><a href="/">Dashboard</a> / <a href="/work-order">Work orders</a> / {{ wo.wo_number }}</div>
+
+<div class="page-header">
+    <h1>{{ wo.wo_number }}</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('purchase-order')">🛒 Refer to Purchase Orders</button>
+        <a href="/work-order/{{ wo.wo_id }}/edit" class="btn btn-warning">Edit WO</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<!-- WO Info Card -->
+<div style="background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:20px; margin-bottom:24px;">
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; font-size:14px;">
+        <div>
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">BOM</div>
+            <div style="font-weight:600;">{{ wo.bom_code }}</div>
+        </div>
+        <div>
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Description</div>
+            <div>{{ wo.bom_desc or '—' }}</div>
+        </div>
+        <div>
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Sets</div>
+            <div>{{ wo.qty_to_build }}</div>
+        </div>
+        <div>
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Status</div>
+            <span class="badge {{ status_map[wo.status][1] }}">{{ status_map[wo.status][0] }}</span>
+        </div>
+        <div>
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Created By</div>
+            <div>{{ wo.created_by }}</div>
+        </div>
+        <div>
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Created At</div>
+            <div>{{ wo.created_at.strftime('%d-%m-%Y') if wo.created_at else '—' }}</div>
+        </div>
+        {% if wo.remarks %}
+        <div style="grid-column: span 3;">
+            <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Remarks</div>
+            <div>{{ wo.remarks }}</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Requirements Table -->
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <h3 style="font-size:15px; font-weight:600; color:#1a2e4a;">Requirements</h3>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <!-- Normal buttons -->
+        <button type="button" id="btn-add-item" class="btn btn-primary" onclick="openAddItemDialog()">+ Add new item</button>
+        <button type="button" id="btn-select-mode" class="btn btn-secondary" style="font-size:13px; padding:6px 12px;" onclick="toggleSelectMode(true)">Select</button>
+        
+        <!-- Select mode active actions (hidden by default) -->
+        <button type="button" id="btn-select-all" class="btn btn-secondary" style="display:none; font-size:13px; padding:6px 12px;" onclick="selectAllItems()">Select All</button>
+        <button type="button" id="btn-remove-selected" class="btn btn-danger" style="display:none; font-size:13px; padding:6px 12px;" onclick="confirmRemoveSelected()">Remove Selected</button>
+        <button type="button" id="btn-cancel-select" class="btn btn-secondary" style="display:none; font-size:13px; padding:6px 12px;" onclick="toggleSelectMode(false)">Cancel</button>
+    </div>
+</div>
+
+<div style="margin-bottom:16px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+    <div style="display:flex; gap:8px; align-items:center;">
+        <span style="font-size:13px; font-weight:600; color:#4a5568;">Search Requirements:</span>
+        <input type="text" id="req-search" placeholder="Search by item code or description..." 
+               style="width:320px; padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); outline: none;">
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <span style="font-size:13px; font-weight:600; color:#4a5568;">Pending Filter:</span>
+        <select id="req-shortage-filter" style="padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; outline:none; cursor:pointer;">
+            <option value="all">All Items</option>
+            <option value="has-shortage">With Pending Qty (> 0)</option>
+            <option value="no-shortage">No Pending (0)</option>
+        </select>
+    </div>
+</div>
+
+<form id="remove-items-form" method="post" action="/work-order/{{ wo.wo_id }}/items/remove" style="margin: 0;">
+<div style="overflow-x:auto; margin-bottom:28px;">
+    <table>
+        <thead>
+            <tr>
+                <th id="th-checkbox" style="display:none; width:40px;"></th>
+                <th>#</th>
+                <th>Item Code</th>
+                <th>Description</th>
+                <th>MPN</th>
+                <th>Manufacturer Name</th>
+                <th>Unit</th>
+                <th title="As stated on the BOM, in the BOM's own unit">BOM Qty</th>
+                <th title="What the store must pull, converted into the unit the item is held in">Required Qty</th>
+                <th>Blocked (this WO)</th>
+                <th>Pending</th>
+                <th>Shortage</th>
+                <th>Available Now</th>
+                <th>Issued</th>
+                <th>Additional Issued</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for item in wo_items %}
+        <tr id="row-{{ item.wo_item_id }}">
+            <td class="td-checkbox" style="display:none; text-align:center; vertical-align:middle;">
+                <input type="checkbox" name="wo_item_ids" value="{{ item.wo_item_id }}" class="item-checkbox" style="width:16px; height:16px; cursor:pointer;">
+            </td>
+            <td>{{ loop.index }}</td>
+            <td class="td-item-code"><strong>{{ item.item_code }}</strong></td>
+            <td class="td-item-desc">{{ item.item_desc }}</td>
+            <td>{{ item.mpn or '—' }}</td>
+            <td>{{ item.manufacturer_name or '—' }}</td>
+            <td>{{ item.unit or '—' }}</td>
+            <td>
+                <input type="number" step="any" min="0"
+                       style="width:80px; padding:4px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px;"
+                       id="bom_qty_{{ item.wo_item_id }}"
+                       value="{{ item.bom_qty }}"
+                       data-wiid="{{ item.wo_item_id }}"
+                       data-itemcode="{{ item.item_code }}"
+                       onfocus="this.dataset.oldVal = this.value;"
+                       onchange="saveBomQty(this)">
+                {% if item.bom_unit and item.bom_unit != item.unit %}
+                <div style="font-size:11px; color:#64748b; margin-top:2px;">in {{ item.bom_unit }}</div>
+                {% endif %}
+            </td>
+            <td>
+                {% if item.qty_required is none %}
+                    <span style="color:#b45309; font-size:11px; font-weight:600;"
+                          title="The BOM states this line in a unit that cannot be converted into the unit the item is held in. No requirement is recorded, because a figure that is wrong by a factor of a thousand looks reasonable on screen.">
+                        no conversion
+                    </span>
+                {% else %}
+                    <span id="qty_req_{{ item.wo_item_id }}" style="font-weight:500;">{{ item.qty_required }}</span>
+                    {% if item.bom_unit and item.bom_unit != item.unit %}
+                    <span style="color:#64748b; font-size:11px;">{{ item.unit }}</span>
+                    {% endif %}
+                {% endif %}
+            </td>
+            <td>{{ item.wo_blocked }}</td>
+            <td>
+                <span id="pending_{{ item.wo_item_id }}" title="Still to issue: required minus issued"
+                      style="font-weight:{% if item.pending > 0 %}600{% else %}500{% endif %}; color:{% if item.pending > 0 %}#b45309{% else %}#27ae60{% endif %};">
+                    {{ item.pending }}
+                </span>
+            </td>
+            <td>
+                <span id="shortage_{{ item.wo_item_id }}" title="Stock still to be sourced: pending minus blocked minus available"
+                      style="font-weight:{% if item.shortage > 0 %}600{% else %}500{% endif %}; color:{% if item.shortage > 0 %}#e74c3c{% else %}#27ae60{% endif %};">
+                    {{ item.shortage }}
+                </span>
+            </td>
+            <td>{{ item.available }}</td>
+            <td>{{ item.qty_issued }}</td>
+            <td>
+                <span id="additional_{{ item.wo_item_id }}" title="Issued beyond the required quantity"
+                      style="font-weight:{% if item.additional_issued > 0 %}600{% else %}500{% endif %}; color:{% if item.additional_issued > 0 %}#7c3aed{% else %}#94a3b8{% endif %};">
+                    {{ item.additional_issued }}
+                </span>
+            </td>
+            <td style="white-space: nowrap;">
+                <div style="display: flex; gap: 6px; align-items: center; flex-direction: row; white-space: nowrap;">
+                    <button type="button" class="btn btn-secondary"
+                            style="font-size:12px; padding:4px 10px;"
+                            data-itemid="{{ item.item_id }}"
+                            data-itemcode="{{ item.item_code }}"
+                            data-woblocked="{{ item.wo_blocked }}"
+                            data-available="{{ item.available }}"
+                            onclick="openBlockDialog(this)">
+                        Block
+                    </button>
+                    <button type="button" class="btn btn-primary"
+                            style="font-size:12px; padding:4px 10px;"
+                            data-itemid="{{ item.item_id }}"
+                            data-itemcode="{{ item.item_code }}"
+                            data-qtyreq="{{ item.qty_required }}"
+                            data-woblocked="{{ item.wo_blocked }}"
+                            data-available="{{ item.available }}"
+                            onclick="openIssueDialog(this)">
+                        Issue
+                    </button>
+                    {% if item.wo_blocked > 0 %}
+                    <button type="button" class="btn btn-danger"
+                            style="font-size:12px; padding:4px 10px;"
+                            data-itemid="{{ item.item_id }}"
+                            data-itemcode="{{ item.item_code }}"
+                            data-woblocked="{{ item.wo_blocked }}"
+                            data-blocks="{{ item.active_blocks | tojson }}"
+                            onclick="openReleaseDialog(this)">
+                        Release
+                    </button>
+                    {% endif %}
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+</form>
+
+<!-- Removed Items -->
+{% if removed_items %}
+<h3 style="font-size:15px; font-weight:600; color:#e74c3c; margin-bottom:12px;">Removed Items (Excluded from Work Order)</h3>
+<div style="overflow-x:auto; margin-bottom:28px;">
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Item Code</th>
+                <th>Description</th>
+                <th>MPN</th>
+                <th>Manufacturer Name</th>
+                <th>Unit</th>
+                <th>BOM Qty</th>
+                <th>Required Qty</th>
+                <th>Available Now</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for item in removed_items %}
+        <tr>
+            <td>{{ loop.index }}</td>
+            <td><strong>{{ item.item_code }}</strong></td>
+            <td>{{ item.item_desc }}</td>
+            <td>{{ item.mpn or '—' }}</td>
+            <td>{{ item.manufacturer_name or '—' }}</td>
+            <td>{{ item.unit or '—' }}</td>
+            <td>{{ item.bom_qty }}</td>
+            <td>{{ item.qty_required }}</td>
+            <td>{{ item.available }}</td>
+            <td>
+                <form method="post" action="/work-order/{{ wo.wo_id }}/item/{{ item.wo_item_id }}/restore" style="margin:0;">
+                    <button type="submit" class="btn btn-success" style="font-size:12px; padding:4px 12px;">Restore back to work order</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- Block Modal -->
+<div id="block-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:420px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:16px; font-weight:600; color:#1a2e4a; margin-bottom:20px;">Block Stock</h3>
+        <div style="background:#f4f6f9; border-radius:8px; padding:14px; margin-bottom:20px; font-size:13px; line-height:2;">
+            <div>Item: <strong id="block-item-label"></strong></div>
+            <div>Available in stock: <strong id="block-available"></strong></div>
+            <div style="color:#e67e22;">Already blocked for this WO: <strong id="block-current"></strong></div>
+        </div>
+        <form method="post" action="/work-order/{{ wo.wo_id }}/block">
+            <input type="hidden" name="item_id" id="block-item-id">
+            <div class="form-group">
+                <label>Qty to Block</label>
+                <input type="number" name="qty_blocked" step="any" min="0.000001"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       required placeholder="Enter qty to block">
+            </div>
+            <div class="form-group">
+                <label>Remarks</label>
+                <input type="text" name="remarks"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Optional">
+            </div>
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button type="submit" class="btn btn-primary">Confirm Block</button>
+                <button type="button" class="btn btn-secondary" onclick="closeBlockDialog()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Issue Modal -->
+<div id="issue-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:420px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:16px; font-weight:600; color:#1a2e4a; margin-bottom:20px;">Issue Stock</h3>
+        <div style="background:#f4f6f9; border-radius:8px; padding:14px; margin-bottom:20px; font-size:13px; line-height:2;">
+            <div>Item: <strong id="issue-item-label"></strong></div>
+            <div>Available in stock: <strong id="issue-available"></strong></div>
+            <div style="color:#e67e22;">Blocked for this WO: <strong id="issue-blocked"></strong></div>
+            <div>Stock after releasing block: <strong id="issue-after-release"></strong></div>
+            <div>Required Qty: <strong id="issue-qty-req"></strong></div>
+        </div>
+        <form method="post" action="/work-order/{{ wo.wo_id }}/issue">
+            <input type="hidden" name="item_id" id="issue-item-id">
+            <input type="hidden" name="bom_id" value="{{ wo.bom_id }}">
+            <div class="form-group">
+                <label>Qty to Issue</label>
+                <input type="number" name="qty_to_issue" id="issue-qty-input"
+                       step="any" min="0.000001"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       required placeholder="Enter qty to issue">
+            </div>
+            <div class="form-group">
+                <label>Remarks</label>
+                <input type="text" name="remarks"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Optional">
+            </div>
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button type="submit" class="btn btn-primary">Confirm Issue</button>
+                <button type="button" class="btn btn-secondary" onclick="closeIssueDialog()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add New Item Modal -->
+<div id="add-item-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:440px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:16px; font-weight:600; color:#1a2e4a; margin-bottom:20px;">Add new item to requirements</h3>
+        <form method="post" action="/work-order/{{ wo.wo_id }}/item/add">
+            <div class="form-group" id="woItemSearchContainer" style="position:relative;">
+                <label>Item Code</label>
+                <input type="text" name="item_code" id="woItemCodeInput" required autocomplete="off"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Start typing an item code, description or MPN">
+                <div id="woItemPredictions"
+                     style="display:none; position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.15); max-height:240px; overflow-y:auto; z-index:1200; margin-top:4px;">
+                </div>
+                <div id="woItemMasterNote" style="display:none; font-size:12px; color:#16a34a; font-weight:600; margin-top:4px;">
+                    ✓ Existing item selected — details filled from the item master.
+                </div>
+                <div id="woItemNewNote" style="display:none; font-size:12px; color:#b45309; font-weight:600; margin-top:4px;">
+                    ⚠ This code is not in the item master yet — saving will create it as a new item.
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" name="item_desc"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Enter description">
+            </div>
+            <div class="form-group">
+                <label>MPN</label>
+                <input type="text" name="mpn"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Enter MPN">
+            </div>
+            <div class="form-group">
+                <label>Manufacturer Name</label>
+                <input type="text" name="manufacturer_name"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Enter manufacturer name">
+            </div>
+            <div class="form-group">
+                <label>BOM Qty (per set)</label>
+                <input type="number" name="bom_qty" step="any" min="0.000001" required
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       placeholder="Enter BOM qty">
+                <div style="font-size:12px; color:#888; margin-top:4px;">
+                    Required qty will be auto-calculated as BOM Qty × {{ wo.qty_to_build }} sets.
+                </div>
+            </div>
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button type="submit" class="btn btn-primary">Save item</button>
+                <button type="button" class="btn btn-secondary" onclick="closeAddItemDialog()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Block Reminder Alert -->
+<div id="block-alert" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1100; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:15px; font-weight:600; color:#e67e22; margin-bottom:12px;">⚠ Block Reminder</h3>
+        <p id="block-alert-msg" style="font-size:13px; color:#444; margin-bottom:20px; line-height:1.6;"></p>
+        <div style="display:flex; gap:10px;">
+            <button class="btn btn-primary" onclick="closeBlockAlert()">OK, I'll block it</button>
+            <button class="btn btn-secondary" onclick="closeBlockAlert()">Dismiss</button>
+        </div>
+    </div>
+</div>
+
+<!-- Removal Confirmation Modal -->
+<div id="remove-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1100; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:16px; font-weight:600; color:#e74c3c; margin-bottom:12px;">⚠ Remove Items</h3>
+        <p style="font-size:13px; color:#444; margin-bottom:20px; line-height:1.6;">
+            The selected <span id="remove-count-label" style="font-weight:600;"></span> item(s) will be removed from the current work order requirements table. Do you wish to proceed?
+        </p>
+        <div style="display:flex; gap:10px;">
+            <button type="button" class="btn btn-danger" onclick="submitRemovalForm()">Yes, proceed</button>
+            <button type="button" class="btn btn-secondary" onclick="closeRemoveConfirmationModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- BOM Update Confirmation Modal -->
+<div id="bom-update-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1100; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:16px; font-weight:600; color:#1a2e4a; margin-bottom:12px;">📋 Update BOM Quantity</h3>
+        <p style="font-size:13px; color:#444; margin-bottom:20px; line-height:1.6;">
+            You are about to modify the BOM Qty for item <span id="bom-update-item-code" style="font-weight:600;"></span>. Do you wish to confirm?
+        </p>
+        <div style="display:flex; gap:10px;">
+            <button type="button" class="btn btn-primary" onclick="proceedBomQtyUpdate()">Yes, confirm</button>
+            <button type="button" class="btn btn-secondary" onclick="cancelBomQtyUpdate()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Release Modal -->
+<div id="release-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px; width:420px; box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+        <h3 style="font-size:16px; font-weight:600; color:#1a2e4a; margin-bottom:20px;">Release Blocked Stock</h3>
+        
+        <div style="background:#f4f6f9; border-radius:8px; padding:14px; margin-bottom:20px; font-size:13px; line-height:2;">
+            <div>Item: <strong id="release-item-label"></strong></div>
+            <div style="color:#e74c3c;">Currently blocked: <strong id="release-total-blocked"></strong></div>
+        </div>
+        
+        <form id="release-qty-form" method="post" action="">
+            <div class="form-group">
+                <label>Qty to Release</label>
+                <input type="number" name="qty_to_release" id="release-qty-input"
+                       step="any" min="0.000001"
+                       style="width:100%; padding:8px 12px; border:1px solid #ccc; border-radius:5px; font-size:14px;"
+                       required placeholder="Enter qty to release">
+            </div>
+            
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button type="submit" class="btn btn-danger">Confirm Release</button>
+                <button type="button" class="btn btn-secondary" onclick="closeReleaseDialog()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+let selectModeActive = false;
+
+function toggleSelectMode(active) {
+    selectModeActive = active;
+    
+    // Toggle buttons
+    document.getElementById('btn-add-item').style.display = active ? 'none' : 'inline-block';
+    document.getElementById('btn-select-mode').style.display = active ? 'none' : 'inline-block';
+    
+    document.getElementById('btn-select-all').style.display = active ? 'inline-block' : 'none';
+    document.getElementById('btn-remove-selected').style.display = active ? 'inline-block' : 'none';
+    document.getElementById('btn-cancel-select').style.display = active ? 'inline-block' : 'none';
+    
+    // Toggle checkbox columns
+    const thCheckbox = document.getElementById('th-checkbox');
+    thCheckbox.style.display = active ? 'table-cell' : 'none';
+    
+    const tdCheckboxes = document.querySelectorAll('.td-checkbox');
+    tdCheckboxes.forEach(td => {
+        td.style.display = active ? 'table-cell' : 'none';
+    });
+    
+    // Reset Select All text
+    document.getElementById('btn-select-all').textContent = 'Select All';
+    
+    // If turning off select mode, uncheck all checkboxes
+    if (!active) {
+        document.querySelectorAll('.item-checkbox').forEach(cb => {
+            cb.checked = false;
+        });
+    }
+}
+
+function selectAllItems() {
+    const checkboxes = document.querySelectorAll('.item-checkbox');
+    const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+    checkboxes.forEach(cb => {
+        cb.checked = !allChecked;
+    });
+    document.getElementById('btn-select-all').textContent = allChecked ? 'Select All' : 'Deselect All';
+}
+
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('item-checkbox')) {
+        const checkboxes = document.querySelectorAll('.item-checkbox');
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        document.getElementById('btn-select-all').textContent = allChecked ? 'Deselect All' : 'Select All';
+    }
+});
+
+function confirmRemoveSelected() {
+    const checkboxes = document.querySelectorAll('.item-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one item to remove.');
+        return;
+    }
+    
+    let blockedItems = [];
+    checkboxes.forEach(cb => {
+        const row = document.getElementById('row-' + cb.value);
+        if (row) {
+            const blockBtn = row.querySelector('button[onclick^="openBlockDialog"]');
+            if (blockBtn) {
+                const woBlocked = parseFloat(blockBtn.dataset.woblocked || '0');
+                const itemCode = blockBtn.dataset.itemcode;
+                if (woBlocked > 0) {
+                    blockedItems.push(itemCode);
+                }
+            }
+        }
+    });
+
+    const modal = document.getElementById('remove-confirm-modal');
+    const msgElement = modal.querySelector('p');
+    
+    if (blockedItems.length > 0) {
+        const itemNames = blockedItems.join(', ');
+        msgElement.innerHTML = `This item (${itemNames}) has blocked quantities. Removing them from the work order will release them back into storage and you must block the quantities again. Do you wish to proceed?`;
+    } else {
+        msgElement.innerHTML = `The selected <span id="remove-count-label" style="font-weight:600;">${checkboxes.length}</span> item(s) will be removed from the current work order requirements table. Do you wish to proceed?`;
+    }
+    
+    modal.style.display = 'flex';
+}
+
+function closeRemoveConfirmationModal() {
+    document.getElementById('remove-confirm-modal').style.display = 'none';
+}
+
+function submitRemovalForm() {
+    document.getElementById('remove-items-form').submit();
+}
+
+function openReleaseDialog(btn) {
+    const itemId = btn.dataset.itemid;
+    const itemCode = btn.dataset.itemcode;
+    const woBlocked = parseFloat(btn.dataset.woblocked);
+    
+    document.getElementById('release-item-label').textContent = itemCode;
+    document.getElementById('release-total-blocked').textContent = woBlocked.toFixed(3) + ' units';
+    
+    // Set form action dynamically
+    document.getElementById('release-qty-form').action = `/work-order/{{ wo.wo_id }}/item/${itemId}/release`;
+    
+    // Set input constraints
+    const input = document.getElementById('release-qty-input');
+    input.max = woBlocked;
+    input.value = ''; // clear previous input
+    
+    document.getElementById('release-modal').style.display = 'flex';
+}
+
+function closeReleaseDialog() {
+    document.getElementById('release-modal').style.display = 'none';
+}
+
+function openBlockDialog(btn) {
+    document.getElementById('block-item-id').value          = btn.dataset.itemid;
+    document.getElementById('block-item-label').textContent = btn.dataset.itemcode;
+    document.getElementById('block-available').textContent  = btn.dataset.available;
+    document.getElementById('block-current').textContent    = btn.dataset.woblocked;
+    document.getElementById('block-modal').style.display    = 'flex';
+}
+function closeBlockDialog() {
+    document.getElementById('block-modal').style.display = 'none';
+}
+
+function openIssueDialog(btn) {
+    const available  = parseFloat(btn.dataset.available);
+    const woBlocked  = parseFloat(btn.dataset.woblocked);
+    const afterRelease = available + woBlocked;
+
+    document.getElementById('issue-item-id').value          = btn.dataset.itemid;
+    document.getElementById('issue-item-label').textContent = btn.dataset.itemcode;
+    document.getElementById('issue-available').textContent  = available;
+    document.getElementById('issue-blocked').textContent    = woBlocked;
+    document.getElementById('issue-after-release').textContent = afterRelease;
+    document.getElementById('issue-qty-req').textContent    = btn.dataset.qtyreq;
+    document.getElementById('issue-qty-input').max          = afterRelease;
+    document.getElementById('issue-modal').style.display    = 'flex';
+}
+function closeIssueDialog() {
+    document.getElementById('issue-modal').style.display = 'none';
+}
+
+function closeBlockAlert() {
+    document.getElementById('block-alert').style.display = 'none';
+}
+
+function openAddItemDialog() {
+    document.getElementById('add-item-modal').style.display = 'flex';
+    woResetItemNotes();
+    document.getElementById('woItemCodeInput').focus();
+}
+function closeAddItemDialog() {
+    document.getElementById('add-item-modal').style.display = 'none';
+    woHidePredictions();
+}
+
+/* ---- Item code suggestions in the "Add new item" dialog ---------------
+   Queries the same /api/items/search endpoint the GRN screen uses, then
+   fills description / MPN / manufacturer from the item master so the same
+   item code is never re-created with slightly different details. */
+let woItemTimer = null;
+let woItemActiveIndex = -1;
+
+function woEsc(str) {
+    const d = document.createElement('div');
+    d.textContent = str == null ? '' : String(str);
+    return d.innerHTML;
+}
+
+function woHidePredictions() {
+    const dd = document.getElementById('woItemPredictions');
+    if (dd) { dd.style.display = 'none'; dd.innerHTML = ''; }
+    woItemActiveIndex = -1;
+}
+
+function woResetItemNotes() {
+    document.getElementById('woItemMasterNote').style.display = 'none';
+    document.getElementById('woItemNewNote').style.display = 'none';
+}
+
+function woFillFromItem(it) {
+    const form = document.getElementById('woItemCodeInput').form;
+    document.getElementById('woItemCodeInput').value = it.item_code || '';
+    if (form.item_desc)          form.item_desc.value          = it.item_desc || '';
+    if (form.mpn)                form.mpn.value                = it.mpn || '';
+    if (form.manufacturer_name)  form.manufacturer_name.value  = it.manufacturer_name || '';
+    woHidePredictions();
+    document.getElementById('woItemNewNote').style.display = 'none';
+    document.getElementById('woItemMasterNote').style.display = 'block';
+    if (form.bom_qty) form.bom_qty.focus();
+}
+
+function woHighlight(rows) {
+    rows.forEach((r, i) => r.style.background = (i === woItemActiveIndex) ? '#eff6ff' : '#ffffff');
+    if (woItemActiveIndex >= 0 && rows[woItemActiveIndex]) {
+        rows[woItemActiveIndex].scrollIntoView({ block: 'nearest' });
+    }
+}
+
+(function initWoItemAutocomplete() {
+    const input = document.getElementById('woItemCodeInput');
+    const dd    = document.getElementById('woItemPredictions');
+    if (!input || !dd) return;
+
+    input.addEventListener('input', function () {
+        const val = this.value.trim();
+        woResetItemNotes();
+        clearTimeout(woItemTimer);
+        if (val.length < 1) { woHidePredictions(); return; }
+
+        woItemTimer = setTimeout(() => {
+            fetch('/api/items/search?q=' + encodeURIComponent(val))
+                .then(res => res.json())
+                .then(data => {
+                    const items = data.items || [];
+                    if (items.length === 0) {
+                        dd.innerHTML = '<div style="padding:10px 14px; font-size:13px; color:#94a3b8;">No matching item in the master — saving will create a new one.</div>';
+                        dd.style.display = 'block';
+                        document.getElementById('woItemNewNote').style.display = 'block';
+                        woItemActiveIndex = -1;
+                        return;
+                    }
+                    document.getElementById('woItemNewNote').style.display = 'none';
+                    dd.innerHTML = items.map(it =>
+                        '<div class="wo-prediction-item" style="padding:8px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; background:#ffffff;">' +
+                            '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+                                '<strong style="color:#1e293b; font-size:13px;">' + woEsc(it.item_code) + '</strong>' +
+                                '<span style="font-size:11px; color:#64748b; background:#f1f5f9; padding:2px 6px; border-radius:4px;">' + woEsc(it.unit || '') + '</span>' +
+                            '</div>' +
+                            '<div style="font-size:12px; color:#64748b; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+                                woEsc(it.item_desc || '') + (it.mpn ? ' • MPN: ' + woEsc(it.mpn) : '') +
+                            '</div>' +
+                        '</div>').join('');
+                    dd.style.display = 'block';
+                    woItemActiveIndex = -1;
+
+                    const rows = Array.from(dd.querySelectorAll('.wo-prediction-item'));
+                    rows.forEach((row, i) => {
+                        row.addEventListener('mouseenter', () => { woItemActiveIndex = i; woHighlight(rows); });
+                        row.addEventListener('click', () => woFillFromItem(items[i]));
+                    });
+                })
+                .catch(err => console.error('Item suggestion lookup failed:', err));
+        }, 200);
+    });
+
+    // Arrow keys / Enter / Escape, so the field can be used without the mouse
+    input.addEventListener('keydown', function (e) {
+        const rows = Array.from(dd.querySelectorAll('.wo-prediction-item'));
+        if (dd.style.display === 'none' || rows.length === 0) {
+            if (e.key === 'Escape') closeAddItemDialog();
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            woItemActiveIndex = (woItemActiveIndex + 1) % rows.length;
+            woHighlight(rows);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            woItemActiveIndex = (woItemActiveIndex - 1 + rows.length) % rows.length;
+            woHighlight(rows);
+        } else if (e.key === 'Enter') {
+            if (woItemActiveIndex >= 0) {
+                e.preventDefault();   // do not submit the form on the first Enter
+                rows[woItemActiveIndex].click();
+            }
+        } else if (e.key === 'Escape') {
+            woHidePredictions();
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('#woItemSearchContainer')) woHidePredictions();
+    });
+})();
+
+let pendingBomUpdate = null;
+
+function saveBomQty(input) {
+    const wiId   = input.dataset.wiid;
+    const bomQty = parseFloat(input.value);
+    if (isNaN(bomQty) || bomQty < 0) return;
+
+    const itemCode = input.dataset.itemcode || '';
+    const oldVal = parseFloat(input.dataset.oldVal);
+
+    // If value didn't change (e.g. focused and blurred without editing), do nothing
+    if (bomQty === oldVal) return;
+
+    // Save pending update details
+    pendingBomUpdate = {
+        inputElement: input,
+        wiId: wiId,
+        bomQty: bomQty,
+        itemCode: itemCode,
+        oldVal: oldVal
+    };
+
+    // Open custom dialog
+    document.getElementById('bom-update-item-code').textContent = itemCode;
+    document.getElementById('bom-update-confirm-modal').style.display = 'flex';
+}
+
+function cancelBomQtyUpdate() {
+    if (pendingBomUpdate) {
+        // Revert input value
+        pendingBomUpdate.inputElement.value = pendingBomUpdate.oldVal;
+        pendingBomUpdate = null;
+    }
+    document.getElementById('bom-update-confirm-modal').style.display = 'none';
+}
+
+function proceedBomQtyUpdate() {
+    if (!pendingBomUpdate) return;
+
+    const { inputElement, wiId, bomQty } = pendingBomUpdate;
+    pendingBomUpdate = null;
+    document.getElementById('bom-update-confirm-modal').style.display = 'none';
+
+    // Update oldVal reference for future changes
+    inputElement.dataset.oldVal = bomQty;
+
+    fetch('/work-order/{{ wo.wo_id }}/item/' + wiId + '/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'bom_qty=' + bomQty
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('qty_req_' + wiId).textContent = data.qty_required;
+
+            const pendingSpan = document.getElementById('pending_' + wiId);
+            if (pendingSpan) {
+                pendingSpan.textContent = data.pending;
+                pendingSpan.style.color      = data.pending > 0 ? '#b45309' : '#27ae60';
+                pendingSpan.style.fontWeight = data.pending > 0 ? '600' : '500';
+            }
+
+            const additionalSpan = document.getElementById('additional_' + wiId);
+            if (additionalSpan) {
+                additionalSpan.textContent = data.additional_issued;
+                additionalSpan.style.color      = data.additional_issued > 0 ? '#7c3aed' : '#94a3b8';
+                additionalSpan.style.fontWeight = data.additional_issued > 0 ? '600' : '500';
+            }
+
+            const shortageSpan = document.getElementById('shortage_' + wiId);
+            if (shortageSpan) {
+                shortageSpan.textContent = data.shortage;
+                if (data.shortage > 0) {
+                    shortageSpan.style.color = '#e74c3c';
+                    shortageSpan.style.fontWeight = '600';
+                } else {
+                    shortageSpan.style.color = '#27ae60';
+                    shortageSpan.style.fontWeight = '500';
+                }
+            }
+            // Trigger dynamic filter update when shortage changes
+            filterRequirements();
+        }
+    });
+}
+
+function filterRequirements() {
+    const query = document.getElementById('req-search').value.toLowerCase().trim();
+    const filterVal = document.getElementById('req-shortage-filter').value;
+    const rows = document.querySelectorAll('table tbody tr[id^="row-"]');
+    
+    rows.forEach(row => {
+        const codeCell = row.querySelector('.td-item-code');
+        const descCell = row.querySelector('.td-item-desc');
+        
+        const codeText = codeCell ? codeCell.textContent.toLowerCase() : '';
+        const descText = descCell ? descCell.textContent.toLowerCase() : '';
+        
+        const matchesSearch = codeText.includes(query) || descText.includes(query);
+        
+        const pendingSpan = row.querySelector('span[id^="pending_"]');
+        const shortageVal = pendingSpan ? parseFloat(pendingSpan.textContent.trim()) : 0.0;
+        
+        let matchesFilter = true;
+        if (filterVal === 'has-shortage') {
+            matchesFilter = (shortageVal > 0);
+        } else if (filterVal === 'no-shortage') {
+            matchesFilter = (shortageVal === 0);
+        }
+        
+        if (matchesSearch && matchesFilter) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+document.getElementById('req-search').addEventListener('input', filterRequirements);
+document.getElementById('req-shortage-filter').addEventListener('change', filterRequirements);
+</script>
+
+{% endblock %}

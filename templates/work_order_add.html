@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="breadcrumb"><a href="/">Dashboard</a> / <a href="/work-order">Work orders</a> / New</div>
+
+<div class="page-header">
+    <h1>New work order</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('purchase-order')">🛒 Refer to Purchase Orders</button>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card">
+    <form method="POST" id="woAddForm">
+
+        <div class="form-group">
+            <label>WO Number</label>
+            <input type="text" value="Auto generated" disabled style="background:#f4f6f9; color:#888;">
+        </div>
+
+        <div class="form-group" style="position:relative;">
+            <label>BOM <span style="color:red;">*</span></label>
+            <input type="text" id="bomSearch" autocomplete="off"
+                   placeholder="Search by BOM code or description"
+                   style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-size:14px; box-sizing:border-box;">
+            <input type="hidden" name="bom_id" id="hiddenBomId" required>
+
+            <div id="bomOptions"
+                 style="display:none; position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.15); max-height:280px; overflow-y:auto; z-index:1200; margin-top:4px;">
+                {% for b in boms %}
+                <div class="bom-option" data-bom-id="{{ b.bom_id }}"
+                     data-code="{{ b.bom_code|lower }}"
+                     data-desc="{{ (b.description or '')|lower }}"
+                     data-label="{{ b.bom_code }}{% if b.description %} — {{ b.description }}{% endif %}"
+                     style="padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+                        <strong style="color:#1e293b; font-size:13px;">{{ b.bom_code }}</strong>
+                        <span style="font-size:11px; color:#64748b; white-space:nowrap;">
+                            {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}{% if b.dns_count %}
+                            <span style="color:#b45309; font-weight:600;">&bull; {{ b.dns_count }} DNS</span>{% endif %}
+                        </span>
+                    </div>
+                    {% if b.description %}
+                    <div style="font-size:12px; color:#64748b; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ b.description }}</div>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div style="padding:14px; font-size:13px; color:#94a3b8;">No BOMs available.</div>
+                {% endfor %}
+            </div>
+
+            <div id="bomChosen" style="display:none; margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding-bottom:6px; margin-bottom:8px;">
+                    <span style="font-size:12px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Selected BOM</span>
+                    <span id="chosenCode" style="font-size:14px; font-weight:700; color:#2563eb;">-</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+                    <span style="font-size:12px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Description</span>
+                    <span id="chosenDesc" style="font-size:13px; color:#334155; font-weight:500; text-align:right; max-width:70%;">-</span>
+                </div>
+                <div id="chosenDns" style="display:none; margin-top:10px; font-size:12px; color:#b45309; font-weight:600;"></div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>No of sets</label>
+            <input type="number" name="qty_to_build" id="qtyToBuild" min="1" required placeholder="Enter number of sets">
+        </div>
+
+        <div class="form-group">
+            <label>Description</label>
+            <input type="text" name="description" placeholder="Enter description (Will default to BOM description if empty)">
+        </div>
+
+        <div class="form-group">
+            <label>Created by</label>
+            <input type="text" name="created_by" placeholder="Your name">
+        </div>
+
+        <div class="form-group">
+            <label>Remarks</label>
+            <textarea name="remarks" rows="3" placeholder="Any remarks"></textarea>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" name="action" value="draft" id="btnSaveDraft" class="btn btn-secondary">Save draft</button>
+            <button type="submit" name="action" value="calculate" id="btnCalculate" class="btn btn-primary">Calculate requirements</button>
+            <a href="/work-order" class="btn btn-secondary">Cancel</a>
+        </div>
+
+    </form>
+</div>
+
+<script>
+(function () {
+    const search  = document.getElementById('bomSearch');
+    const list    = document.getElementById('bomOptions');
+    const hidden  = document.getElementById('hiddenBomId');
+    const chosen  = document.getElementById('bomChosen');
+    const options = Array.from(document.querySelectorAll('.bom-option'));
+
+    function showList() { list.style.display = 'block'; }
+    function hideList() { list.style.display = 'none'; }
+
+    function filter() {
+        const q = search.value.toLowerCase().trim();
+        options.forEach(o => {
+            const hit = !q || o.dataset.code.includes(q) || o.dataset.desc.includes(q);
+            o.style.display = hit ? '' : 'none';
+        });
+        showList();
+    }
+
+    search.addEventListener('focus', filter);
+    search.addEventListener('input', function () {
+        hidden.value = '';          // typing again clears the previous choice
+        chosen.style.display = 'none';
+        filter();
+    });
+
+    options.forEach(o => {
+        o.addEventListener('click', function () {
+            hidden.value = this.dataset.bomId;
+            search.value = this.dataset.label;
+            document.getElementById('chosenCode').textContent = this.querySelector('strong').textContent;
+            const descEl = this.querySelector('div[style*="ellipsis"]');
+            document.getElementById('chosenDesc').textContent = descEl ? descEl.textContent.trim() : '\u2014';
+
+            const dnsEl = this.querySelector('span[style*="b45309"]');
+            const dnsBox = document.getElementById('chosenDns');
+            if (dnsEl) {
+                dnsBox.textContent = '\u26a0 ' + dnsEl.textContent.replace(/[^0-9]/g, '') +
+                                     ' item(s) on this BOM are marked Do Not Stuff and will be left out of the work order.';
+                dnsBox.style.display = 'block';
+            } else {
+                dnsBox.style.display = 'none';
+            }
+            chosen.style.display = 'block';
+            hideList();
+        });
+        o.addEventListener('mouseenter', function () { this.style.background = '#eff6ff'; });
+        o.addEventListener('mouseleave', function () { this.style.background = '#fff'; });
+    });
+
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.form-group')) hideList();
+    });
+
+    // Stop submission with nothing chosen — the hidden field carries the id,
+    // and a typed-but-unselected name would post an empty bom_id.
+    document.getElementById('woAddForm').addEventListener('submit', function (e) {
+        if (!hidden.value) {
+            e.preventDefault();
+            alert('Please select a BOM from the list.');
+            search.focus();
+        }
+    });
+})();
+</script>
+{% endblock %}

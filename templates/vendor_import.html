@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/purchase-order">Purchase Orders</a> / Import vendors
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Import Vendors</h1>
+    <a href="/purchase-order" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if not preview %}
+<div class="form-card">
+    <div class="alert" style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155; line-height:1.6;">
+        An Excel file with one vendor per row. The first row names the columns;
+        a blank row beneath it does no harm.
+        <div style="margin-top:10px; font-size:13px;">
+            Recognised headings — <code>short_name</code>, <code>full_name</code>,
+            <code>gst_no</code>, <code>address_line_1</code>, <code>pincode</code>,
+            <code>city</code>, <code>state</code>, <code>country</code>,
+            <code>ph_no</code>, <code>email</code>. Spelling is matched loosely,
+            so <code>GST No</code> and <code>GSTIN</code> both work.
+        </div>
+        <div style="margin-top:10px; font-size:13px; color:#64748b;">
+            Vendors are matched on <strong>short name</strong>. An existing vendor is
+            updated rather than duplicated, and a blank cell never wipes a value
+            that is already on record. Nothing is written until you confirm.
+        </div>
+    </div>
+
+    <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="stage" value="preview">
+        <div class="form-group">
+            <label style="font-weight:600;">Vendor file <span class="required">*</span></label>
+            <input type="file" name="file" accept=".xlsx,.xls" required class="input-field">
+        </div>
+        <button type="submit" class="btn-primary" style="padding:9px 22px; font-weight:600;">
+            Read the file
+        </button>
+    </form>
+</div>
+
+{% else %}
+
+<div class="detail-card" style="margin-bottom:18px;">
+    <div class="detail-grid">
+        <div><span class="detail-label">File</span><strong>{{ filename }}</strong></div>
+        <div><span class="detail-label">Sheet</span>{{ meta.sheet }}</div>
+        <div><span class="detail-label">Header row</span>{{ meta.header_row }}</div>
+        <div><span class="detail-label">Vendors in file</span><strong>{{ preview.total_rows }}</strong></div>
+    </div>
+</div>
+
+<div class="alert" style="background:#f0fdf4; border:1px solid #86efac; color:#166534;">
+    <strong>{{ preview.new_vendors|length }}</strong> new vendor(s),
+    <strong>{{ preview.existing_vendors|length }}</strong> already on record.
+    {% if meta.skipped_no_name %}
+    <div style="margin-top:6px; font-size:13px;">
+        {{ meta.skipped_no_name }} row(s) had no name and were ignored — blank rows,
+        headings and totals.
+    </div>
+    {% endif %}
+</div>
+
+{% if preview.gst_clashes %}
+<div class="alert" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b;">
+    <strong>A GST number in this file already belongs to a different vendor.</strong>
+    A GST number identifies one company, so one of these two records is wrong.
+    <div style="margin-top:8px; font-size:13px;">
+        {% for c in preview.gst_clashes %}
+        <div><code>{{ c.gst_no }}</code> — file calls it <strong>{{ c.in_file }}</strong>,
+             already on record as <strong>{{ c.on_record }}</strong></div>
+        {% endfor %}
+    </div>
+    <div style="margin-top:8px; font-size:13px;">
+        Importing anyway creates a second vendor with the same GST number. Worth
+        settling first.
+    </div>
+</div>
+{% endif %}
+
+{% if preview.duplicates_in_file %}
+<div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>The same name appears more than once in the file.</strong>
+    The last row wins, and the earlier ones are overwritten as the import runs.
+    <div style="margin-top:6px; font-size:13px;">
+        {% for name, n in preview.duplicates_in_file.items() %}<code>{{ name }}</code> ×{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if preview.fields_with_no_column %}
+<div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>The file carries information the vendor table has nowhere to put.</strong>
+    These columns will be ignored:
+    <code>{{ preview.fields_with_no_column|join('</code>, <code>')|safe }}</code>.
+    <div style="margin-top:6px; font-size:13px;">
+        Everything else imports normally. Adding these columns to the table is a
+        separate decision, not something an import should do on its own.
+    </div>
+</div>
+{% endif %}
+
+{% if meta.unmapped_headings %}
+<div class="alert" style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155;">
+    Headings that matched nothing and were skipped:
+    <code>{{ meta.unmapped_headings|join('</code>, <code>')|safe }}</code>
+</div>
+{% endif %}
+
+{% if preview.existing_vendors %}
+<h3 style="font-size:15px; margin:20px 0 8px; color:#1a2e4a;">Already on record</h3>
+<div class="table-wrapper">
+    <table class="data-table" style="font-size:13px;">
+        <thead><tr><th style="width:180px;">Vendor</th><th>What changes</th></tr></thead>
+        <tbody>
+        {% for v in preview.existing_vendors %}
+            <tr>
+                <td><strong>{{ v.short_name }}</strong>
+                    {% if v.revived %}<div style="font-size:11px; color:#b45309;">will be restored from deleted</div>{% endif %}
+                </td>
+                <td>
+                    {% if v.changes %}
+                        {% for c in v.changes %}
+                        <div><code>{{ c.field }}</code>:
+                            <span style="color:#78716c;">{{ c.was }}</span> →
+                            <strong>{{ c.now }}</strong></div>
+                        {% endfor %}
+                    {% else %}
+                        <span style="color:#94a3b8;">nothing — the file matches what is on record</span>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<h3 style="font-size:15px; margin:20px 0 8px; color:#1a2e4a;">
+    First {{ rows|length }} row(s) as read
+</h3>
+<div class="table-wrapper">
+    <table class="data-table" style="font-size:12px;">
+        <thead>
+            <tr>
+                <th>Short name</th><th>Full name</th><th>GST</th>
+                <th>Address</th><th>City</th><th>Pincode</th>
+                <th>Country</th><th>Phone</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+            <tr>
+                <td><strong>{{ r.short_name or '—' }}</strong></td>
+                <td>{{ r.full_name or '—' }}</td>
+                <td>{{ r.gst_no or '—' }}</td>
+                <td>{{ r.address_line_1 or '—' }}</td>
+                <td>{{ r.city or '—' }}</td>
+                <td>{{ r.pincode or '—' }}</td>
+                <td>{{ r.country or '—' }}</td>
+                <td>{{ r.ph_no or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<form method="post" style="margin-top:22px;">
+    <input type="hidden" name="stage" value="confirm">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <button type="submit" class="btn-primary" style="padding:10px 26px; font-weight:600;">
+        Import {{ preview.total_rows }} vendor(s)
+    </button>
+    <a href="/vendors/import" class="btn-outline" style="padding:10px 20px; margin-left:8px;">Choose a different file</a>
+</form>
+
+{% endif %}
+{% endblock %}

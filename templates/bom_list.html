@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>Bill of Materials</h1>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="filter-bar">
+    <form method="get" action="/bom" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="search" placeholder="Search by BOM code or description"
+               value="{{ search }}" class="search-input">
+        <button type="submit" class="btn-dark">Search</button>
+        <a href="/bom" class="btn-outline">Clear</a>
+    </form>
+</div>
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>BOM Code</th>
+                <th>Description</th>
+                <th>Items</th>
+                <th>Work Orders</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if boms %}
+            {% for b in boms %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td><a href="/bom/{{ b.bom_id }}" class="table-link"><strong>{{ b.bom_code }}</strong></a></td>
+                <td>{{ b.description or '—' }}</td>
+                <td>{{ b.item_count }}</td>
+                <td>{{ b.wo_count }}</td>
+                <td style="white-space: nowrap;">
+                    <a href="/bom/{{ b.bom_id }}" class="btn btn-secondary" style="font-size:12px; padding:4px 10px; text-decoration:none;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="6" style="text-align:center; color:#888; padding:40px;">
+                No BOMs found.
+            </td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

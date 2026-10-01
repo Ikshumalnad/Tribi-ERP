@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/bom">BOM</a> / Upload
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Upload BOM</h1>
+    <a href="/bom" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card" style="max-width: 700px;">
+    <form method="post" action="/bom/upload" enctype="multipart/form-data">
+        <div class="form-group" style="margin-bottom: 20px;">
+            <label style="font-weight:600;">Excel File (.xlsx) <span class="required">*</span></label>
+            <input type="file" name="bom_file" accept=".xlsx, .xlsm" class="input-field" required
+                   style="padding:12px; border:2px dashed #cbd5e1; border-radius:8px; cursor:pointer; background:#fafafa;">
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                The BOM code is read from the sheet name, so the workbook must contain a
+                sheet named like <code>Purchase-300044124028</code>.
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 20px;">
+            <label style="font-weight:600;">Description</label>
+            <input type="text" name="description" class="input-field"
+                   placeholder="Optional — e.g. Controller Board Rev C">
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                Leave blank to use the file name.
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 24px;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600;">
+                <input type="checkbox" name="replace_existing" value="1">
+                Replace the items of an existing BOM
+            </label>
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                Without this, uploading a BOM code that already exists is refused so you
+                cannot overwrite one by accident. With it ticked, the BOM keeps its
+                existing work order links and its item lines are rebuilt from the file.
+            </div>
+        </div>
+
+        <div style="display:flex; gap:12px;">
+            <button type="submit" class="btn-primary" style="padding:10px 24px; font-weight:600;">📥 Upload BOM</button>
+            <a href="/bom" class="btn-outline" style="padding:10px 20px; align-self:center;">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<div class="panel" style="margin-top:28px; max-width:700px; border-left:4px solid #1a2e4a;">
+    <h3 style="color:#1a2e4a; text-transform:none; font-size:14px; font-weight:600; margin:0 0 12px;">📋 How the file is read</h3>
+    <ul style="font-size:13px; color:#475569; padding-left:20px; line-height:1.8; margin-bottom:12px;">
+        <li><strong>BOM code:</strong> taken from the sheet name after <code>Purchase</code> — e.g. sheet <code>Purchase-300044124028</code> gives BOM code <code>300044124028</code>.</li>
+        <li><strong>Item Code:</strong> a column containing <code>Item Code</code> or <code>Code</code></li>
+        <li><strong>Quantity:</strong> <code>Qty</code> or <code>Quantity</code> — the amount needed per one set</li>
+        <li><strong>Optional:</strong> <code>MPN</code> / <code>Part No</code>, <code>Manufacturer</code> / <code>Make</code> / <code>Brand</code>, <code>Description</code></li>
+    </ul>
+    <p style="font-size:12px; color:#16a34a; font-weight:600;">
+        💡 Item codes that are not in the item master yet are created automatically, so no row is skipped.
+    </p>
+    <p style="font-size:12px; color:#64748b; margin-top:8px;">
+        Rows with a blank item code, a non-numeric quantity, or a quantity of zero or less are ignored.
+    </p>
+</div>
+{% endblock %}

@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/storage">Storage</a> / Import
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Import Store Inventory</h1>
+    <a href="/storage" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if not preview %}
+<!-- ===================== STEP 1: choose a file ===================== -->
+<div class="form-card" style="max-width:720px;">
+    <form method="post" action="/storage/import" enctype="multipart/form-data">
+        <input type="hidden" name="stage" value="preview">
+
+        <div class="form-group" style="margin-bottom:20px;">
+            <label style="font-weight:600;">Inventory file (.xls or .xlsx) <span class="required">*</span></label>
+            <input type="file" name="excel_file" accept=".xls,.xlsx,.xlsm" required
+                   style="padding:12px; border:2px dashed #cbd5e1; border-radius:8px; cursor:pointer; background:#fafafa; width:100%; box-sizing:border-box;">
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                The first sheet is read. Extra columns are ignored, so a report exported
+                from another system can be uploaded as it is.
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom:24px;">
+            <label style="font-weight:600;">Default location</label>
+            <input type="text" name="default_location" class="input-field" value="Main Store"
+                   placeholder="e.g. Main Store" style="width:100%; box-sizing:border-box;">
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                Used only for rows where the file gives no location.
+            </div>
+        </div>
+
+        <button type="submit" class="btn-primary" style="padding:10px 24px; font-weight:600;">Read file and preview →</button>
+    </form>
+</div>
+
+<div class="panel" style="margin-top:28px; max-width:720px; border-left:4px solid #1a2e4a;">
+    <h3 style="color:#1a2e4a; text-transform:none; font-size:14px; font-weight:600; margin:0 0 12px;">What the file needs</h3>
+    <p style="font-size:13px; color:#475569; margin-bottom:10px; line-height:1.5;">
+        Column headings are matched by keyword, so spelling and order do not need to be exact.
+        Only two columns are essential.
+    </p>
+    <table class="data-table" style="font-size:13px; margin-bottom:14px;">
+        <thead><tr style="background:#f8fafc;">
+            <th style="width:150px;">Column</th><th style="width:90px;">Needed</th><th>Matched on</th>
+        </tr></thead>
+        <tbody>
+            <tr><td><strong>Item code</strong></td><td>Yes</td><td><code>Item Name</code>, <code>Item Code</code>, <code>Code</code></td></tr>
+            <tr><td><strong>Stock</strong></td><td>Yes</td><td><code>Stock</code>, <code>Closing Stock</code>, <code>Phy Stk</code>, <code>Qty</code></td></tr>
+            <tr><td>Description</td><td>No</td><td><code>Item Description</code>, <code>Description</code></td></tr>
+            <tr><td>Unit</td><td>No</td><td><code>Unit</code>, <code>UOM</code></td></tr>
+            <tr><td>MPN</td><td>No</td><td><code>MPN</code>, <code>Part No</code></td></tr>
+            <tr><td>Location</td><td>No</td><td><code>Location</code>, <code>Bin</code>, <code>Rack</code></td></tr>
+        </tbody>
+    </table>
+    <ul style="font-size:13px; color:#475569; padding-left:20px; line-height:1.8; margin-bottom:12px;">
+        <li><strong>GRN Qty, Issued Qty, Rate and Value are ignored</strong> — they are movements and money, not a stock balance.</li>
+        <li><strong>MPN splits on a spaced hyphen.</strong> <code>Keltron - SA1011EMAS</code> gives manufacturer <em>Keltron</em>, part <em>SA1011EMAS</em>. A part number containing hyphens, like <code>ACPL-M61L-060E</code>, is left whole.</li>
+        <li><strong>Missing manufacturers and units are created.</strong> <code>num</code> becomes <code>pcs</code>, <code>mts</code> becomes <code>m</code>, <code>kgs</code> becomes <code>kg</code>.</li>
+        <li><strong>Quantities are added</strong> to whatever the item already holds.</li>
+    </ul>
+</div>
+
+{% else %}
+<!-- ===================== STEP 2: review, then confirm ===================== -->
+<div class="panel" style="margin-bottom:20px; border-left:4px solid #2563eb;">
+    <h3 style="color:#1a2e4a; text-transform:none; font-size:14px; font-weight:600; margin:0 0 6px;">
+        Read <code>{{ filename }}</code> — sheet “{{ meta.sheet }}”, headings on row {{ meta.header_row }}
+    </h3>
+    <div style="font-size:13px; color:#475569;">
+        Columns used:
+        {% for k, v in meta.columns.items() %}{% if v %}<code>{{ v }}</code> as {{ k }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}
+    </div>
+    {% if meta.skipped_no_code %}
+    <div style="font-size:12px; color:#64748b; margin-top:6px;">
+        {{ meta.skipped_no_code }} row(s) had no item code and were ignored (blank rows, headings, totals).
+    </div>
+    {% endif %}
+    {% if preview and (preview.desc_overwrites or preview.mfr_overwrites) %}
+    <div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+        <strong>The file will replace values that are already in the item master.</strong>
+        <div style="margin-top:6px; font-size:13px;">
+            {% if preview.desc_overwrites %}
+                {{ preview.desc_overwrites|length }} description(s) will change.
+            {% endif %}
+            {% if preview.mfr_overwrites %}
+                {{ preview.mfr_overwrites|length }} manufacturer(s) will change.
+            {% endif %}
+            There is no undo for this short of restoring a backup.
+        </div>
+        {% if preview.desc_overwrites %}
+        <details style="margin-top:10px;">
+            <summary style="cursor:pointer; font-weight:600;">Descriptions</summary>
+            <table style="font-size:12px; margin-top:8px; width:100%;">
+                <tr style="text-align:left;"><th style="width:130px;">Item</th><th>Currently</th><th>Becomes</th></tr>
+                {% for d in preview.desc_overwrites[:25] %}
+                <tr>
+                    <td><code>{{ d.item_code }}</code></td>
+                    <td style="color:#78716c;">{{ d.was }}</td>
+                    <td><strong>{{ d.now }}</strong></td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% if preview.desc_overwrites|length > 25 %}
+            <div style="font-size:12px; margin-top:6px;">and {{ preview.desc_overwrites|length - 25 }} more.</div>
+            {% endif %}
+        </details>
+        {% endif %}
+        {% if preview.mfr_overwrites %}
+        <details style="margin-top:10px;">
+            <summary style="cursor:pointer; font-weight:600;">Manufacturers</summary>
+            <table style="font-size:12px; margin-top:8px; width:100%;">
+                <tr style="text-align:left;"><th style="width:130px;">Item</th><th>Currently</th><th>Becomes</th></tr>
+                {% for m in preview.mfr_overwrites[:25] %}
+                <tr>
+                    <td><code>{{ m.item_code }}</code></td>
+                    <td style="color:#78716c;">{{ m.was }}</td>
+                    <td><strong>{{ m.now }}</strong></td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% if preview.mfr_overwrites|length > 25 %}
+            <div style="font-size:12px; margin-top:6px;">and {{ preview.mfr_overwrites|length - 25 }} more.</div>
+            {% endif %}
+        </details>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if meta.skipped_bad_code %}
+    <div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+        {{ meta.skipped_bad_code|length }} row(s) had something in the item code column
+        that cannot be a part number and were ignored:
+        <code>{{ meta.skipped_bad_code[:10]|join('</code>, <code>')|safe }}</code>{% if meta.skipped_bad_code|length > 10 %} and {{ meta.skipped_bad_code|length - 10 }} more{% endif %}.
+        <div style="margin-top:6px; font-size:13px;">
+            Dates, separator lines and punctuation-only cells. If one of these is a
+            real part number, it needs correcting in the spreadsheet first.
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px;">
+    <div style="flex:1; min-width:130px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px;">
+        <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Rows</div>
+        <div style="font-size:20px; font-weight:700; color:#1e293b;">{{ preview.total_rows }}</div>
+    </div>
+    <div style="flex:1; min-width:130px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:14px;">
+        <div style="font-size:11px; color:#166534; text-transform:uppercase; letter-spacing:0.5px;">New items</div>
+        <div style="font-size:20px; font-weight:700; color:#166534;">{{ preview.new_items }}</div>
+    </div>
+    <div style="flex:1; min-width:130px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px;">
+        <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Existing items</div>
+        <div style="font-size:20px; font-weight:700; color:#1e293b;">{{ preview.existing_items }}</div>
+    </div>
+    <div style="flex:1; min-width:130px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px;">
+        <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Total quantity</div>
+        <div style="font-size:20px; font-weight:700; color:#1e293b;">{{ preview.total_qty }}</div>
+    </div>
+</div>
+
+{% if preview.items_with_stock %}
+<div class="alert alert-warning" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>Quantities are added to existing stock.</strong>
+    {{ preview.items_with_stock }} item(s) in this file already hold stock
+    ({{ preview.qty_already_held }} in total), and the figures below will be added
+    to what they have. Importing the same file twice will count it twice.
+</div>
+{% else %}
+<div class="alert" style="background:#f0fdf4; border:1px solid #86efac; color:#166534;">
+    <strong>Nothing in this file currently holds stock.</strong>
+    Every quantity below lands as a fresh figure, so there is no chance of doubling
+    on this run. ({{ preview.existing_items }} of these items already exist in the item
+    master — that is the master, not stock.)
+</div>
+{% endif %}
+
+<form method="post" action="/storage/import" id="confirmForm">
+<input type="hidden" name="stage" value="confirm">
+<input type="hidden" name="token" value="{{ token }}">
+<input type="hidden" name="filename" value="{{ filename }}">
+<input type="hidden" name="default_location" value="{{ default_location }}">
+
+{% if preview.new_manufacturers %}
+{% set suspect_count = preview.new_manufacturers|selectattr('suspicious')|list|length %}
+<div class="panel" style="margin-bottom:16px; border-left:4px solid #b45309;">
+    <h3 style="color:#b45309; text-transform:none; font-size:14px; font-weight:600; margin:0 0 4px;">
+        {{ preview.new_manufacturers|length }} new manufacturer name(s) found — tick the real ones
+    </h3>
+    <p style="font-size:12px; color:#92400e; margin:0 0 12px;">
+        These are the characters before the hyphen in the MPN column. Some are genuine
+        manufacturers; some are just part numbers that happen to contain a hyphen.
+        <strong>Ticked names are created as manufacturers. Unticked names are left alone —
+        the MPN is stored whole, exactly as it appears in the file.</strong>
+        {% if suspect_count %}
+        <span style="display:block; margin-top:6px;">
+            {{ suspect_count }} name(s) are highlighted below because they carry digits and
+            look like part numbers. Check those first.
+        </span>
+        {% endif %}
+    </p>
+
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; font-size:12px;">
+        <button type="button" class="btn-outline" style="padding:5px 12px;" onclick="setAllMfr(true)">Tick all</button>
+        <button type="button" class="btn-outline" style="padding:5px 12px;" onclick="setAllMfr(false)">Untick all</button>
+        {% if suspect_count %}
+        <button type="button" class="btn-outline" style="padding:5px 12px;" onclick="untickSuspicious()">
+            Untick the {{ suspect_count }} suspicious one(s)
+        </button>
+        {% endif %}
+        <span style="color:#475569; margin-left:auto;">
+            <strong id="mfrCount">{{ preview.new_manufacturers|length }}</strong> will be created
+        </span>
+    </div>
+
+    <div class="table-wrapper" style="max-height:340px; overflow:auto;">
+        <table class="data-table" style="font-size:13px;">
+            <thead>
+                <tr>
+                    <th style="width:70px;">Create?</th>
+                    <th>Name from the file</th>
+                    <th style="width:80px;">Rows</th>
+                    <th>Example MPN cell</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for m in preview.new_manufacturers %}
+                <tr class="mfr-row" {% if m.suspicious %}style="background:#fef2f2;"{% endif %}>
+                    <td style="text-align:center;">
+                        <input type="checkbox" name="keep_mfr" value="{{ m.name }}"
+                               class="mfr-check" data-suspicious="{{ 1 if m.suspicious else 0 }}"
+                               onchange="updateMfrCount()" checked
+                               style="width:16px; height:16px; cursor:pointer;">
+                    </td>
+                    <td>
+                        <strong>{{ m.name }}</strong>
+                        {% if m.suspicious %}
+                        <span style="background:#fee2e2; color:#991b1b; font-size:11px; padding:1px 6px; border-radius:3px; margin-left:6px;">
+                            looks like a part number
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>{{ m.count }}</td>
+                    <td style="color:#475569; font-family:monospace; font-size:12px;">{{ m.sample or '—' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if preview.packaging_units %}
+<div class="panel" style="margin-bottom:16px; border-left:4px solid #64748b;">
+    <h3 style="color:#334155; text-transform:none; font-size:14px; font-weight:600; margin:0 0 8px;">
+        Packaging words skipped, not treated as units
+    </h3>
+    <div style="font-size:13px; color:#475569; line-height:1.9;">
+        {% for word, n in preview.packaging_units.items() %}<span style="background:#f1f5f9; padding:2px 8px; border-radius:4px; margin-right:4px; display:inline-block;">{{ word }} <span style="color:#94a3b8;">&times;{{ n }}</span></span>{% endfor %}
+    </div>
+    <p style="font-size:12px; color:#475569; margin-top:10px; margin-bottom:0;">
+        A roll of one cable is 100 m and another is 500 m, so these say nothing
+        about how much there is and cannot convert to anything. Those rows are
+        imported with their quantity but without a unit, for someone to set by hand.
+    </p>
+</div>
+{% endif %}
+
+{% if preview.new_units %}
+<div class="panel" style="margin-bottom:16px; border-left:4px solid #b45309;">
+    <h3 style="color:#b45309; text-transform:none; font-size:14px; font-weight:600; margin:0 0 8px;">
+        Units to be created: {% for u in preview.new_units %}<code>{{ u }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </h3>
+</div>
+{% endif %}
+
+{% if preview.duplicates %}
+<div class="panel" style="margin-bottom:16px; border-left:4px solid #b91c1c;">
+    <h3 style="color:#b91c1c; text-transform:none; font-size:14px; font-weight:600; margin:0 0 8px;">
+        {{ preview.duplicates|length }} item code(s) appear more than once
+    </h3>
+    <div style="font-size:13px; color:#475569;">
+        {% for code, n in preview.duplicates.items() %}<code>{{ code }}</code> ×{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    <p style="font-size:12px; color:#991b1b; margin-top:8px; margin-bottom:0;">
+        Their quantities will each be added, so the item ends up with the combined total.
+    </p>
+</div>
+{% endif %}
+
+<h3 style="font-size:14px; color:#1a2e4a; margin:22px 0 10px;">First {{ sample|length }} rows</h3>
+<div class="table-wrapper" style="margin-bottom:22px;">
+    <table class="data-table" style="font-size:13px;">
+        <thead>
+            <tr>
+                <th>Item Code</th><th>Description</th><th>Unit</th>
+                <th>Manufacturer</th><th>MPN</th><th>MPN cell in file</th><th>Location</th><th>Qty to add</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in sample %}
+            <tr>
+                <td><strong>{{ r.item_code }}</strong></td>
+                <td>{{ r.desc or '—' }}</td>
+                <td>{{ r.unit_text or '—' }}</td>
+                <td>{% if r.manufacturer_name %}<span style="color:#1d4ed8;">{{ r.manufacturer_name }}</span>{% else %}<span style="color:#94a3b8;">—</span>{% endif %}</td>
+                <td>{{ r.mpn or '—' }}</td>
+                <td style="color:#94a3b8; font-family:monospace; font-size:12px;">{{ r.mpn_raw or '—' }}</td>
+                <td>{{ r.location or '—' }}</td>
+                <td style="font-weight:600;">{{ r.qty }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div style="display:flex; gap:12px; align-items:center;">
+    <button type="submit" class="btn-primary" style="padding:10px 24px; font-weight:600;"
+            onclick="this.disabled=true; this.innerText='Importing\u2026'; this.form.submit();">
+        Import {{ preview.total_rows }} row(s)
+    </button>
+    <a href="/storage/import" class="btn-outline" style="padding:10px 20px;">Choose a different file</a>
+</div>
+</form>
+
+<script>
+function mfrChecks() { return Array.prototype.slice.call(document.querySelectorAll('.mfr-check')); }
+
+function updateMfrCount() {
+    var el = document.getElementById('mfrCount');
+    if (!el) { return; }
+    el.textContent = mfrChecks().filter(function (c) { return c.checked; }).length;
+}
+
+function setAllMfr(state) {
+    mfrChecks().forEach(function (c) { c.checked = state; });
+    updateMfrCount();
+}
+
+function untickSuspicious() {
+    mfrChecks().forEach(function (c) {
+        if (c.dataset.suspicious === '1') { c.checked = false; }
+    });
+    updateMfrCount();
+}
+
+updateMfrCount();
+</script>
+{% endif %}
+{% endblock %}

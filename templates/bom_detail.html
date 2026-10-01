@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/bom">BOM</a>
+    {%- for step in trail %} / <a href="/bom/{{ step.bom_id }}{% if step.path %}?path={{ step.path }}{% endif %}">{{ step.bom_code }}</a>{% endfor %} / {{ bom.bom_code }}
+</div>
+
+{% if is_cycle %}
+<div class="alert alert-danger">
+    This BOM appears inside itself further up the chain, so the nesting loops.
+    Showing it once here — worth checking the BOM data.
+</div>
+{% endif %}
+
+<div class="page-header">
+    <h1>BOM: {{ bom.bom_code }}</h1>
+    <div style="display:flex; gap:8px;">
+        <a href="/bom" class="btn-outline">← All BOMs</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="detail-card" style="margin-bottom:20px;">
+    <div class="detail-grid">
+        <div><span class="detail-label">BOM Code</span> {{ bom.bom_code }}</div>
+        <div><span class="detail-label">Description</span> {{ bom.description or '—' }}</div>
+        <div><span class="detail-label">Items</span> {{ bom_items|length }}{% if dns_count %} <span style="color:#b45309; font-weight:600;">({{ dns_count }} DNS)</span>{% endif %}</div>
+        <div><span class="detail-label">Sub-assemblies</span> {% if sub_bom_count %}<a href="#" onclick="showOnlySubBoms(event)" style="color:#2563eb; font-weight:600;">{{ sub_bom_count }}</a>{% else %}—{% endif %}</div>
+        <div><span class="detail-label">Work Orders Using This</span> {{ linked_wos|length }}</div>
+    </div>
+</div>
+
+<div style="margin-bottom:16px; display:flex; gap:8px; align-items:center;">
+    <span style="font-size:13px; font-weight:600; color:#4a5568;">Search Items:</span>
+    <input type="text" id="bom-item-search" placeholder="Search by item code or description..."
+           style="width:320px; padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; outline:none;">
+</div>
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Item Code</th>
+                <th>Description</th>
+                <th>MPN</th>
+                <th>Manufacturer</th>
+                <th>Unit</th>
+                <th>Qty per Set</th>
+                <th>Patch</th>
+                <th>Available Stock</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if bom_items %}
+            {% for item in bom_items %}
+            <tr class="bom-item-row{% if item.child_bom_id %} is-sub-bom{% endif %}"{% if item.is_dns %} style="background:#fafafa; color:#94a3b8;"{% endif %}>
+                <td>{{ loop.index }}</td>
+                <td>
+                    {% if item.child_bom_id %}
+                        <a href="/bom/{{ item.child_bom_id }}?path={{ child_path }}" class="table-link" title="Open this sub-assembly's own BOM"><strong>{{ item.item_code }}</strong></a>
+                        <span style="font-size:10px; font-weight:700; color:#1d4ed8; background:#dbeafe; padding:1px 5px; border-radius:3px; vertical-align:middle;">BOM ›</span>
+                    {% else %}
+                        <strong>{{ item.item_code }}</strong>
+                    {% endif %}
+                    {% if item.is_dns %} <span style="font-size:10px; font-weight:700; color:#b45309; background:#fef3c7; padding:1px 5px; border-radius:3px; vertical-align:middle;">DNS</span>{% endif %}
+                </td>
+                <td>{{ item.item_desc or '—' }}</td>
+                <td>{{ item.mpn or '—' }}</td>
+                <td>{{ item.manufacturer_name or '—' }}</td>
+                <td>{{ item.unit or '—' }}</td>
+                <td>{{ item.qty }}</td>
+                <td style="font-size:12px;">{{ item.patch or '—' }}</td>
+                <td>{{ item.available }}</td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="9" style="text-align:center; color:#888; padding:40px;">This BOM has no items.</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if linked_wos %}
+<h3 style="margin:28px 0 12px; font-size:15px; color:#1a2e4a;">Work Orders built from this BOM</h3>
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>WO Number</th>
+                <th>Sets</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for wo in linked_wos %}
+        {% set status_info = status_map.get(wo.status, ('Unknown', 'badge-open')) %}
+        <tr>
+            <td><a href="/work-order/{{ wo.wo_id }}" class="table-link"><strong>{{ wo.wo_number }}</strong></a></td>
+            <td>{{ wo.qty_to_build }}</td>
+            <td><span class="badge {{ status_info[1] }}">{{ status_info[0] }}</span></td>
+            <td><a href="/work-order/{{ wo.wo_id }}" class="btn btn-secondary" style="font-size:12px; padding:4px 10px; text-decoration:none;">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<script>
+// Toggle between all rows and only the sub-assembly rows, for a BOM with
+// hundreds of lines where the nested ones are what you actually want.
+let subBomOnly = false;
+function showOnlySubBoms(e) {
+    e.preventDefault();
+    subBomOnly = !subBomOnly;
+    document.querySelectorAll('.bom-item-row').forEach(row => {
+        row.style.display = (!subBomOnly || row.classList.contains('is-sub-bom')) ? '' : 'none';
+    });
+    document.getElementById('bom-item-search').value = '';
+}
+
+document.getElementById('bom-item-search').addEventListener('input', function() {
+    subBomOnly = false;
+    const query = this.value.toLowerCase().trim();
+    document.querySelectorAll('.bom-item-row').forEach(row => {
+        const codeText = row.cells[1].textContent.toLowerCase();
+        const descText = row.cells[2].textContent.toLowerCase();
+        row.style.display = (codeText.includes(query) || descText.includes(query)) ? '' : 'none';
+    });
+});
+</script>
+{% endblock %}

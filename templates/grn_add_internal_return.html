@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header" style="max-width: 1100px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center;">
+    <h1>{% if is_convert %}Modify GRN Type — {{ grn_no }}{% else %}New Internal Return GRN — {{ grn_no }}{% endif %}</h1>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="{% if is_convert %}/grn{% else %}/grn/add{% endif %}" class="btn-outline">← Back</a>
+    </div>
+</div>
+
+<div class="form-card" style="max-width: 1100px; width: 100%; margin: 0 auto; padding: 32px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); box-sizing: border-box;">
+    <form method="post" action="{% if is_convert %}/grn/{{ grn.grn_id }}/convert{% else %}/grn/add/internal-return{% endif %}" id="internalReturnForm">
+        <input type="hidden" name="grn_no" value="{{ grn_no }}">
+        {% if is_convert %}
+        <input type="hidden" name="target_type" value="{{ target_type }}">
+        {% endif %}
+
+        <!-- Header Details Boundary Box -->
+        <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 10px; padding: 24px; margin-bottom: 24px;">
+            <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 16px; color: #1a2e4a; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">1. Return Header Details</h3>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label style="font-weight: 600;">GRN Number</label>
+                    <input type="text" value="{{ grn_no }}" readonly class="input-field" style="background-color: #f1f5f9; font-weight: 700; color: #1e293b;">
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight: 600;">Returned By <span style="color:red;">*</span></label>
+                    <input type="text" name="returned_by" value="{{ returned_by }}" class="input-field" placeholder="Person who returned items" required style="font-weight: 600;">
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight: 600;">Return Date <span style="color:red;">*</span></label>
+                    <input type="date" name="return_date" class="input-field" value="{{ grn.invoice_date if is_convert and grn and grn.invoice_date else today }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight: 600;">Remarks</label>
+                    <input type="text" name="remarks" class="input-field" value="{{ grn.remarks if is_convert and grn else '' }}" placeholder="Optional return comments or reason">
+                </div>
+            </div>
+        </div>
+
+        <!-- Returned Items Boundary Box -->
+        <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+                <h3 style="margin: 0; font-size: 16px; color: #1a2e4a; font-weight: 700;">2. Returned Items</h3>
+                <button type="button" class="btn-outline" onclick="addReturnItemLine()" style="font-weight: 600; font-size: 13px;">+ Add Item</button>
+            </div>
+
+            <datalist id="items-datalist">
+                {% for it in items %}
+                <option value="{{ it.item_code }}">{{ it.item_code }} — {{ it.item_desc or '' }}</option>
+                {% endfor %}
+            </datalist>
+
+            <div style="border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; margin-bottom: 24px;">
+                <table class="data-table" id="return-items-table" style="margin: 0; width: 100%;">
+                    <thead>
+                        <tr style="background: #f8fafc;">
+                            <th style="width: 45px;">#</th>
+                            <th style="min-width: 180px;">Item Code</th>
+                            <th style="min-width: 260px;">Item Description</th>
+                            <th style="width: 140px;">Qty Received <span style="color:red;">*</span></th>
+                            <th>Remarks</th>
+                            <th style="width: 45px; text-align: center;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="return-items-body">
+                        <!-- Loaded dynamically via JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="display:flex; gap:12px; margin-top:24px;">
+                <button type="submit" class="btn-primary" style="padding: 10px 24px; font-weight: 600; font-size: 14px;">{% if is_convert %}Save modified GRN Type{% else %}Save GRN{% endif %}</button>
+                <a href="/grn" class="btn-outline" style="padding: 10px 20px; font-size: 14px;">Cancel</a>
+            </div>
+        </div>
+
+    </form>
+</div>
+
+<script id="items-json-data" type="application/json">{{ items | tojson }}</script>
+<script>
+const allItems = JSON.parse(document.getElementById('items-json-data').textContent);
+
+function addReturnItemLine() {
+    const tbody = document.getElementById('return-items-body');
+    const rowIdx = tbody.children.length + 1;
+    const tr = document.createElement('tr');
+
+    tr.innerHTML = `
+        <td class="row-num">${rowIdx}</td>
+        <td>
+            <input type="text" list="items-datalist" class="input-field item-code-input" placeholder="Type Item Code..." oninput="onItemTyped(this)" style="width: 100%; font-weight: 600;">
+            <input type="hidden" name="item_id[]" class="item-id-hidden" required>
+        </td>
+        <td>
+            <div class="item-desc-badge" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; min-height: 38px; display: flex; align-items: center; font-size: 13px;">
+                <span style="color: #94a3b8;">Description will be fetched automatically</span>
+            </div>
+        </td>
+        <td>
+            <input type="number" step="0.001" min="0" value="0" name="qty_received[]" class="input-field" placeholder="0" required style="width: 100%; font-weight: 600;">
+        </td>
+        <td>
+            <input type="text" name="line_remarks[]" class="input-field" placeholder="Item return notes..." style="width: 100%;">
+        </td>
+        <td style="text-align: center;">
+            <button type="button" class="btn-outline" onclick="removeReturnItemLine(this)" style="color: #ef4444; border-color: #fca5a5; padding: 4px 8px; font-size: 12px;">✕</button>
+        </td>
+    `;
+
+    tbody.appendChild(tr);
+}
+
+function removeReturnItemLine(btn) {
+    const tbody = document.getElementById('return-items-body');
+    btn.closest('tr').remove();
+    Array.from(tbody.children).forEach((tr, i) => {
+        tr.querySelector('.row-num').innerText = i + 1;
+    });
+}
+
+function onItemTyped(inputElem) {
+    const row = inputElem.closest('tr');
+    const hiddenId = row.querySelector('.item-id-hidden');
+    const descBadge = row.querySelector('.item-desc-badge');
+    const code = inputElem.value.trim();
+
+    if (!code) {
+        hiddenId.value = '';
+        descBadge.innerHTML = '<span style="color: #94a3b8;">Description will be fetched automatically</span>';
+        descBadge.style.background = '#f8fafc';
+        descBadge.style.borderColor = '#e2e8f0';
+        return;
+    }
+
+    const found = allItems.find(it => it.item_code.toLowerCase() === code.toLowerCase());
+    if (found) {
+        hiddenId.value = found.item_id;
+        descBadge.innerHTML = '<span style="color: #15803d; font-weight: 600; margin-right: 6px;">✓</span> <strong>' + (found.item_desc || 'No description available') + '</strong>' +
+                              (found.mpn ? ' <span style="font-size:11px; color:#64748b; margin-left: 4px;">(MPN: ' + found.mpn + ')</span>' : '');
+        descBadge.style.background = '#f0fdf4';
+        descBadge.style.borderColor = '#86efac';
+    } else {
+        hiddenId.value = '';
+        descBadge.innerHTML = '<span style="color: #dc2626; font-weight: 600;">✕ Item code not found</span>';
+        descBadge.style.background = '#fef2f2';
+        descBadge.style.borderColor = '#fca5a5';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', addReturnItemLine);
+</script>
+{% endblock %}

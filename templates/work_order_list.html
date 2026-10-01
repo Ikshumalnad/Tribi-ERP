@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>Work orders</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn btn-secondary ref-toggle-btn" onclick="toggleSplitScreen('purchase-order')">🛒 Refer to Purchase Orders</button>
+        <a href="/work-order/add" class="btn btn-primary" style="text-decoration:none;">+ New work order</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="filter-bar">
+    <form method="get" action="/work-order" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="search" placeholder="Search by WO number, BOM or description"
+               value="{{ search }}" class="search-input">
+        <select name="status" class="filter-select">
+            <option value="">All statuses</option>
+            {% for k, v in status_map.items() %}
+            <option value="{{ k }}" {% if status_filter == k|string %}selected{% endif %}>{{ v[0] }}</option>
+            {% endfor %}
+        </select>
+        <label style="display:flex; align-items:center; gap:6px; font-size:14px;">
+            <input type="checkbox" name="pending_only" value="1" {% if pending_only %}checked{% endif %}>
+            Requirements pending only
+        </label>
+        <button type="submit" class="btn-dark">Search</button>
+        <a href="/work-order" class="btn-outline">Clear</a>
+    </form>
+</div>
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>WO Number</th>
+                <th>BOM Code</th>
+                <th>Description</th>
+                <th>Sets</th>
+                <th>Status</th>
+                <th>Created At</th>
+                <th>Created By</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if work_orders %}
+            {% for wo in work_orders %}
+            {% set status_info = status_map[wo.status] %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td><a href="/work-order/{{ wo.wo_id }}" class="table-link"><strong>{{ wo.wo_number }}</strong></a></td>
+                <td><strong>{{ wo.bom_code }}</strong></td>
+                <td>{{ wo.bom_desc or '—' }}</td>
+                <td>{{ wo.qty_to_build }}</td>
+                <td><span class="badge {{ status_info[1] }}">{{ status_info[0] }}</span></td>
+                <td>{{ wo.created_at.strftime('%d-%m-%Y') if wo.created_at else '—' }}</td>
+                <td>{{ wo.created_by }}</td>
+                <td style="white-space: nowrap;">
+                    <a href="/work-order/{{ wo.wo_id }}" class="btn btn-secondary" style="font-size:12px; padding:4px 10px; text-decoration: none;">View</a>
+                    <a href="/work-order/{{ wo.wo_id }}/edit" class="btn btn-warning" style="font-size:12px; padding:4px 10px; margin-left: 4px; text-decoration: none;">Edit</a>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="9" style="text-align:center; color:#888; padding:40px;">No work orders found.</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

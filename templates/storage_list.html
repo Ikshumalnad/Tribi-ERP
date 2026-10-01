@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>Storage</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <a href="/unit-conversions" class="btn btn-secondary" style="text-decoration:none;">⚖ Unit Conversions</a>
+        <a href="/storage/import" class="btn btn-secondary" style="text-decoration:none;">📥 Import Excel</a>
+        <a href="/storage/add" class="btn btn-primary" style="text-decoration:none;">+ New Storage Entry</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="storage-stats-container" style="margin-bottom: 20px; display: flex; gap: 16px; flex-wrap: wrap;">
+    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px 24px; display: flex; align-items: center; gap: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.04); min-width: 280px; flex: 1; max-width: 400px;">
+        <div style="width: 48px; height: 48px; border-radius: 10px; background: #e0f2fe; color: #0284c7; display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0;">
+            📦
+        </div>
+        <div>
+            <div style="font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Total Items Available in Storage</div>
+            <div style="font-size: 24px; font-weight: 700; color: #0f172a; margin-top: 2px;">
+                {{ "{:,}".format(total_physical_availability) if total_physical_availability is defined else (storages | sum(attribute='physical_availability')) }}
+                <span style="font-size: 13px; font-weight: 500; color: #64748b; margin-left: 4px;">items</span>
+            </div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">Sum of all physical store availability</div>
+        </div>
+    </div>
+</div>
+
+<div class="filter-bar">
+    <form method="get" action="/storage" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="search" placeholder="Search item code / location / MPN / manufacturer..."
+               value="{{ search }}" class="search-input">
+        <button type="submit" class="btn-dark">Search</button>
+        <a href="/storage" class="btn-outline">Clear</a>
+    </form>
+</div>
+
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Store ID</th>
+                <th>Item Code</th>
+                <th>Description</th>
+                <th>Manufacturer</th>
+                <th>Store Location</th>
+                <th>Physical store availability</th>
+                <th>Currently available</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if storages %}
+            {% for s in storages %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ s.store_id }}</td>
+                <td><strong>{{ s.item_code }}</strong></td>
+                <td>{{ s.item_desc or '—' }}</td>
+                <td>
+                    {% if s.mpn and s.manufacturer_name %}
+                        {{ s.mpn }} - {{ s.manufacturer_name }}
+                    {% elif s.mpn %}
+                        {{ s.mpn }}
+                    {% elif s.manufacturer_name %}
+                        {{ s.manufacturer_name }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td>{{ s.store_location }}</td>
+                <td>{{ s.physical_availability }}</td>
+                <td>{{ s.currently_available }}</td>
+                <td style="white-space: nowrap;">
+                    <div style="display: flex; gap: 6px; align-items: center; flex-direction: row; white-space: nowrap;">
+                        <a href="/storage/{{ s.store_id }}/edit" class="btn-dark btn-sm" style="text-decoration: none;">Edit</a>
+                        <form method="post" action="/storage/{{ s.store_id }}/delete" style="display: inline; margin: 0;"
+                              onsubmit="return confirm('Delete this storage entry?');">
+                            <button type="submit" class="btn-outline btn-sm">Delete</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="9" style="text-align:center; color:#888; padding:40px;">No storage entries found.</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

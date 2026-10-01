@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>QC Inspection — {{ grn.grn_no }}</h1>
+    <a href="/grn" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="detail-card" style="margin-bottom: 24px;">
+    <div class="detail-grid">
+        <div>
+            <span class="detail-label">GRN No</span>
+            <strong>{{ grn.grn_no }}</strong>
+        </div>
+        <div>
+            <span class="detail-label">GRN Status</span>
+            <span class="badge {{ grn.status_badge }}">{{ grn.status or 'Received' }}</span>
+        </div>
+        <div>
+            <span class="detail-label">GRN Type</span>
+            {{ grn.grn_type_label }}
+        </div>
+        <div>
+            <span class="detail-label">Vendor</span>
+            {{ grn.vendor_short_name or grn.vendor_full_name or '—' }}
+        </div>
+        <div>
+            <span class="detail-label">Invoice No</span>
+            {{ grn.invoice_no or '—' }}
+        </div>
+        <div>
+            <span class="detail-label">Received Date</span>
+            {{ grn.received_date }}
+        </div>
+        {% if grn.remarks %}
+        <div>
+            <span class="detail-label">Description / Remarks</span>
+            {{ grn.remarks }}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<form method="post" action="/grn/{{ grn.grn_id }}/qc">
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Item Code</th>
+                    <th>Item Name / Description</th>
+                    <th style="text-align: center; width: 70px;">Unit</th>
+                    <th style="text-align: right;">Qty Received</th>
+                    <th style="text-align: right;">Qty Accepted <span class="required">*</span></th>
+                    <th style="text-align: right;">Qty Pending</th>
+                    <th style="text-align: right;">Qty Rejected <span class="required">*</span></th>
+                    <th>Remarks</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in grn_items %}
+                {% set acc = item.qty_accepted if item.qty_accepted is not none else 0.0 %}
+                {% set rej = item.qty_rejected if item.qty_rejected is not none else 0.0 %}
+                {% set pend = item.qty_received - acc - rej %}
+                <tr>
+                    <td>
+                        <strong>{{ item.item_code }}</strong>
+                        <input type="hidden" name="grn_item_id[]" value="{{ item.grn_item_id }}">
+                    </td>
+                    <td>{{ item.item_desc }}</td>
+                    <td style="text-align: center;">
+                        {% if item.item_unit %}
+                            <strong style="font-size: 13px;">{{ item.item_unit }}</strong>
+                            {% if item.unit_changed %}
+                            <div style="font-size: 11px; color: #b45309; margin-top: 2px;"
+                                 title="This line was received in {{ item.received_unit }}. The item is now held in {{ item.item_unit }}, so the figures below no longer mean what they did when they were entered.">
+                                was {{ item.received_unit }} ⚠
+                            </div>
+                            {% endif %}
+                        {% else %}
+                            <span style="font-size: 11px; color: #b91c1c;"
+                                  title="This item has no stock unit. Accepting a quantity will still add it to storage, but nobody can say what the number counts.">
+                                no unit ⚠
+                            </span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align: right;">
+                        <span id="qty-recv-{{ item.grn_item_id }}">{{ item.qty_received }}</span><span
+                              style="color: #64748b; font-size: 12px;"> {{ item.item_unit or '' }}</span>
+                    </td>
+                    <td style="text-align: right;">
+                        <input type="number" 
+                               name="qty_accepted[]" 
+                               id="qty-acc-{{ item.grn_item_id }}"
+                               class="input-field" 
+                               style="width: 110px; text-align: right;" 
+                               step="any" 
+                               min="0" 
+                               max="{{ item.qty_received }}"
+                               value="{{ acc }}"
+                               required
+                               oninput="calculateQCStatus('{{ item.grn_item_id }}')"><span
+                              style="color: #64748b; font-size: 12px;"> {{ item.item_unit or '' }}</span>
+                    </td>
+                    <td style="text-align: right;">
+                        <span id="qty-pend-{{ item.grn_item_id }}" style="font-weight: 700; color: #2563eb;">{{ '%.6f'|format(pend if pend > 0 else 0.0) }}</span><span
+                            style="color: #64748b; font-size: 12px; font-weight: 400;"> {{ item.item_unit or '' }}</span>
+                    </td>
+                    <td style="text-align: right;">
+                        <input type="number" 
+                               name="qty_rejected[]" 
+                               id="qty-rej-{{ item.grn_item_id }}"
+                               class="input-field" 
+                               style="width: 110px; text-align: right;" 
+                               step="any" 
+                               min="0" 
+                               max="{{ item.qty_received }}"
+                               value="{{ rej }}"
+                               required
+                               oninput="calculateQCStatusReversed('{{ item.grn_item_id }}')"><span
+                              style="color: #64748b; font-size: 12px;"> {{ item.item_unit or '' }}</span>
+                    </td>
+                    <td>
+                        <input type="text" 
+                               name="line_remarks[]" 
+                               class="input-field" 
+                               value="{{ item.remarks or '' }}" 
+                               placeholder="Inspection comments...">
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="form-card" style="margin-top: 24px; padding: 20px; background: #fafafa; border: 1px solid #e5e7eb;">
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Inspection Metadata & Actions</h3>
+        <div class="form-grid" style="margin-bottom: 20px;">
+            <div class="form-group">
+                <label>Inspected By <span class="required">*</span></label>
+                <input type="text" 
+                       name="inspected_by" 
+                       class="input-field" 
+                       value="{{ grn.inspected_by or logged_user }}" 
+                       required>
+            </div>
+            <div class="form-group">
+                <label>Inspection Date <span class="required">*</span></label>
+                <input type="date" 
+                       name="inspection_date" 
+                       class="input-field" 
+                       value="{{ grn.inspection_date or today }}" 
+                       required>
+            </div>
+        </div>
+        
+        <div style="display: flex; gap: 12px;">
+            <button type="submit" name="action" value="update_qc" class="btn-primary" style="padding: 10px 24px; font-weight: 600; background-color: #0d9488; border-color: #0d9488;">
+                ✅ Update QC Results
+            </button>
+            <a href="/grn" class="btn-outline" style="padding: 10px 20px; align-self: center;">Cancel</a>
+        </div>
+    </div>
+</form>
+
+<script>
+function calculateQCStatus(itemId) {
+    const recvVal = parseFloat(document.getElementById('qty-recv-' + itemId).innerText) || 0;
+    const accField = document.getElementById('qty-acc-' + itemId);
+    const rejField = document.getElementById('qty-rej-' + itemId);
+    const pendSpan = document.getElementById('qty-pend-' + itemId);
+    
+    let accVal = parseFloat(accField.value) || 0;
+    let rejVal = parseFloat(rejField.value) || 0;
+    
+    if (accVal < 0) {
+        accVal = 0;
+        accField.value = 0;
+    }
+    if (accVal > recvVal) {
+        accVal = recvVal;
+        accField.value = recvVal;
+    }
+    
+    if (accVal + rejVal > recvVal) {
+        rejVal = Math.max(0, recvVal - accVal);
+        rejField.value = parseFloat(rejVal.toFixed(6));
+    }
+    
+    const pendVal = Math.max(0, recvVal - accVal - rejVal);
+    pendSpan.innerText = parseFloat(pendVal.toFixed(6));
+}
+
+function calculateQCStatusReversed(itemId) {
+    const recvVal = parseFloat(document.getElementById('qty-recv-' + itemId).innerText) || 0;
+    const accField = document.getElementById('qty-acc-' + itemId);
+    const rejField = document.getElementById('qty-rej-' + itemId);
+    const pendSpan = document.getElementById('qty-pend-' + itemId);
+    
+    let accVal = parseFloat(accField.value) || 0;
+    let rejVal = parseFloat(rejField.value) || 0;
+    
+    if (rejVal < 0) {
+        rejVal = 0;
+        rejField.value = 0;
+    }
+    if (rejVal > recvVal) {
+        rejVal = recvVal;
+        rejField.value = recvVal;
+    }
+    
+    if (accVal + rejVal > recvVal) {
+        accVal = Math.max(0, recvVal - rejVal);
+        accField.value = parseFloat(accVal.toFixed(6));
+    }
+    
+    const pendVal = Math.max(0, recvVal - accVal - rejVal);
+    pendSpan.innerText = parseFloat(pendVal.toFixed(6));
+}
+</script>
+{% endblock %}

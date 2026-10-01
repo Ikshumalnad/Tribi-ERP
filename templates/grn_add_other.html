@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>New {{ grn_type_label }} GRN — {{ grn_no }}</h1>
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div class="ref-toggle-btn" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">📖 Reference Window:</span>
+            <select onchange="if(this.value) switchRefWindow(this.value)" style="font-size: 12px; padding: 4px 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; cursor: pointer; color: #0f172a;">
+                <option value="">— Select Reference Window —</option>
+                <option value="work-order">📋 Work Orders</option>
+                <option value="purchase-order">🛒 Purchase Orders</option>
+                <option value="storage">📦 Storage</option>
+            </select>
+        </div>
+        <a href="/grn/add" class="btn-outline">← Back</a>
+    </div>
+</div>
+
+<div class="form-card">
+    <form method="post" action="/grn/add/other">
+        <input type="hidden" name="grn_no" value="{{ grn_no }}">
+        <input type="hidden" name="grn_type" value="{{ grn_type }}">
+
+        <div class="form-grid">
+            {% if grn_type == 1 %}
+            <div class="form-group">
+                <label style="font-weight: 600;">Source Work Order <span style="color:red;">*</span></label>
+                <select name="wo_id_ref" class="input-field" required style="width: 100%;">
+                    <option value="">— Select Work Order —</option>
+                    {% for wo in open_wos %}
+                    <option value="{{ wo.wo_id }}">{{ wo.wo_number }} — {{ wo.description or '' }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            {% if grn_type == 3 %}
+            <div class="form-group">
+                <label style="font-weight: 600;">Vendor / Platform <span style="font-size:11px; color:#64748b; font-weight:normal;">(Optional)</span></label>
+                <select name="vendor_id" class="input-field" style="width: 100%;">
+                    <option value="">— Select Vendor (Optional) —</option>
+                    {% for v in vendors %}
+                    <option value="{{ v.vendor_id }}">{{ v.short_name }} — {{ v.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            <div class="form-group">
+                <label style="font-weight: 600;">Invoice / Reference Number</label>
+                <input type="text" name="invoice_no" class="input-field" placeholder="e.g. REF-2026-001">
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600;">Date <span style="color:red;">*</span></label>
+                <input type="date" name="invoice_date" class="input-field" value="{{ today }}" required>
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600;">Remarks</label>
+                <input type="text" name="remarks" class="input-field" placeholder="Optional notes">
+            </div>
+        </div>
+
+        <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 16px; color: #1e293b; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">Received Items</h3>
+
+        <div style="margin-bottom: 12px;">
+            <button type="button" class="btn-outline" onclick="addOtherLine()" style="font-weight: 600;">+ Add Item Line</button>
+        </div>
+
+        <datalist id="all-items-list">
+            {% for it in items %}
+            <option value="{{ it.item_code }}">{{ it.item_code }} — {{ it.item_desc or '' }}</option>
+            {% endfor %}
+        </datalist>
+
+        <table class="data-table" id="other-items-table">
+            <thead>
+                <tr>
+                    <th style="min-width: 200px;">Item Code</th>
+                    <th style="width: 140px;">Qty Received <span style="color:red;">*</span></th>
+                    <th>Remarks</th>
+                    <th style="width: 50px;"></th>
+                </tr>
+            </thead>
+            <tbody id="other-items-body">
+                <tr id="empty-other-row">
+                    <td colspan="4" style="text-align:center; color:#aaa; padding:20px;">Click "+ Add Item Line" to add items</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="display:flex; gap:12px; margin-top:24px;">
+            <button type="submit" class="btn-primary" style="padding: 10px 24px; font-weight: 600; font-size: 14px;">Save GRN</button>
+            <a href="/grn" class="btn-outline" style="padding: 10px 20px; font-size: 14px;">Cancel</a>
+        </div>
+
+    </form>
+</div>
+
+<script id="all-items-data" type="application/json">{{ items | tojson }}</script>
+<script>
+const allItems = JSON.parse(document.getElementById('all-items-data').textContent);
+
+function addOtherLine() {
+    const empty = document.getElementById('empty-other-row');
+    if (empty) empty.remove();
+
+    const tbody = document.getElementById('other-items-body');
+    const tr = document.createElement('tr');
+
+    tr.innerHTML = `
+        <td>
+            <input type="text" list="all-items-list" class="input-field" placeholder="Type Item Code..." oninput="onItemTyped(this)" style="width: 100%;">
+            <input type="hidden" name="item_id[]" class="item-id-hidden" required>
+            <div class="item-badge" style="font-size: 11px; color: #64748b; margin-top: 4px;"></div>
+        </td>
+        <td>
+            <input type="number" step="0.001" min="0" value="0" name="qty_received[]" class="input-field" placeholder="0" required style="width: 100%;">
+        </td>
+        <td>
+            <input type="text" name="line_remarks[]" class="input-field" placeholder="Item notes..." style="width: 100%;">
+        </td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-outline" onclick="this.closest('tr').remove()" style="color:red;">✕</button>
+        </td>
+    `;
+    tbody.appendChild(tr);
+}
+
+function onItemTyped(elem) {
+    const tr = elem.closest('tr');
+    const hiddenId = tr.querySelector('.item-id-hidden');
+    const badge = tr.querySelector('.item-badge');
+    const code = elem.value.trim();
+
+    const found = allItems.find(i => i.item_code.toLowerCase() === code.toLowerCase());
+    if (found) {
+        hiddenId.value = found.item_id;
+        badge.innerHTML = '<span style="color:green; font-weight:600;">✓ ' + (found.item_desc || found.item_code) + '</span>';
+    } else {
+        hiddenId.value = '';
+        badge.innerHTML = code ? '<span style="color:red;">✕ Item code not found</span>' : '';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', addOtherLine);
+</script>
+{% endblock %}

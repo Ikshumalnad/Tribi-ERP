@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/storage">Storage</a> / Unit conversions
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Unit Conversions</h1>
+    <a href="/storage" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="alert" style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155; line-height:1.6;">
+    These are for parts bought in one kind of measure and held in another —
+    copper wire arrives by weight and is used by length. Conversions <em>within</em>
+    a family (kilograms to grams, metres to centimetres) are handled already and
+    need nothing here.
+    <div style="margin-top:8px; font-size:13px; color:#64748b;">
+        An item with no row here can still be received and issued. What it loses is
+        the check that a receipt does not exceed the order, because there is no
+        honest way to compare the two quantities.
+    </div>
+</div>
+
+{% if stale %}
+<div class="alert alert-warning" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+    <strong>{{ stale|length }} conversion(s) no longer match their item's stock unit.</strong>
+    The item's unit was changed after the factor was measured, so the figure is now
+    wrong by whatever those two units differ by. These need re-measuring, not
+    re-pointing:
+    <div style="margin-top:6px;">
+        {% for s in stale %}<code>{{ s.item_code }}</code> — measured against
+        <strong>{{ s.measured_against }}</strong>, item now holds
+        <strong>{{ s.now_holds or 'no unit' }}</strong>{% if not loop.last %}; {% endif %}{% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- ── Add ──────────────────────────────────────────────────── -->
+<div class="form-card" style="margin-bottom:22px;">
+    <h3 style="font-size:15px; margin:0 0 14px; color:#1a2e4a;">Add a conversion</h3>
+    <form method="post" action="/unit-conversions/add" id="convForm">
+        <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end;">
+            <div class="form-group" style="flex:2; min-width:260px; margin:0;">
+                <label style="font-weight:600;">Item <span class="required">*</span></label>
+                <input type="text" id="itemSearch" placeholder="Type a code or description…"
+                       autocomplete="off" class="input-field" style="width:100%;">
+                <input type="hidden" name="item_id" id="itemId" required>
+                <div id="itemResults" style="position:relative;"></div>
+                <div id="itemStock" style="font-size:12px; color:#64748b; margin-top:5px;"></div>
+            </div>
+
+            <div class="form-group" style="flex:1; min-width:150px; margin:0;">
+                <label style="font-weight:600;">Other unit <span class="required">*</span></label>
+                <select name="unit_id" id="altUnit" class="input-field" required style="width:100%;">
+                    <option value="">Select…</option>
+                    {% for u in units %}
+                    <option value="{{ u.unit_id }}">{{ u.unit_short_name }} — {{ u.unit_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group" style="flex:1; min-width:120px; margin:0;">
+                <label style="font-weight:600;">Numerator <span class="required">*</span></label>
+                <input type="number" name="conv_fact_num" id="numIn" min="1" step="1"
+                       class="input-field" required style="width:100%;">
+            </div>
+
+            <div class="form-group" style="flex:1; min-width:120px; margin:0;">
+                <label style="font-weight:600;">Denominator <span class="required">*</span></label>
+                <input type="number" name="conv_fact_denom" id="denIn" min="1" step="1"
+                       value="1" class="input-field" required style="width:100%;">
+            </div>
+        </div>
+
+        <div id="readout" style="margin:14px 0; padding:11px 14px; border-radius:6px;
+                                 background:#f1f5f9; color:#64748b; font-size:14px;">
+            Pick an item and a unit to see what the numbers mean.
+        </div>
+
+        <div class="form-group" style="margin-bottom:14px;">
+            <label style="font-weight:600;">Where the figure came from</label>
+            <input type="text" name="remarks" maxlength="100" class="input-field"
+                   placeholder="Vendor datasheet, weighed in stores, calculated from gauge…"
+                   style="width:100%;">
+            <div style="font-size:12px; color:#64748b; margin-top:5px;">
+                Worth filling in. In a year, "1 kg = 223 m, from the datasheet" can be
+                checked; a bare 223 cannot.
+            </div>
+        </div>
+
+        <button type="submit" class="btn-primary" style="padding:9px 22px; font-weight:600;">
+            Save conversion
+        </button>
+    </form>
+</div>
+
+<!-- ── Existing ─────────────────────────────────────────────── -->
+<h3 style="font-size:15px; margin:22px 0 10px; color:#1a2e4a;">
+    {{ rows|length }} conversion(s) on file
+</h3>
+
+{% if rows %}
+<div class="table-wrapper">
+    <table class="data-table" style="font-size:13px;">
+        <thead>
+            <tr>
+                <th style="min-width:130px;">Item Code</th>
+                <th style="min-width:200px;">Description</th>
+                <th style="width:190px;">Means</th>
+                <th style="width:110px;">Stored as</th>
+                <th style="min-width:180px;">Source</th>
+                <th style="width:150px;">Last changed</th>
+                <th style="width:80px;"></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+            <tr {% if r.is_stale %}style="background:#fffbeb;"{% endif %}>
+                <td><strong>{{ r.item_code }}</strong></td>
+                <td>{{ r.desc or '—' }}</td>
+                <td>
+                    <strong>1 {{ r.stock_unit }} = {{ r.per_stock }} {{ r.alt_unit }}</strong>
+                    <div style="font-size:11px; color:#64748b; margin-top:2px;">
+                        1 {{ r.alt_unit }} = {{ r.per_alt }} {{ r.stock_unit }}
+                    </div>
+                </td>
+                <td style="font-family:monospace; color:#64748b;">
+                    {{ r.conv_fact_num }} / {{ r.conv_fact_denom }}
+                </td>
+                <td style="color:#475569;">{{ r.remarks or '—' }}</td>
+                <td style="color:#64748b; font-size:12px;">
+                    {{ r.updated_at.strftime('%d %b %Y') if r.updated_at else '—' }}
+                    {% if r.updated_by %}<div>by {{ r.updated_by }}</div>{% endif %}
+                </td>
+                <td>
+                    <form method="post" action="/unit-conversions/{{ r.conv_id }}/delete"
+                          onsubmit="return confirm('Remove the conversion for {{ r.item_code }}?\n\nReceipts and issues will still be allowed — they just lose the check against the order.');">
+                        <button type="submit" class="btn-outline"
+                                style="padding:4px 10px; font-size:12px; color:#b91c1c; border-color:#fca5a5;">
+                            Remove
+                        </button>
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div style="padding:26px; text-align:center; color:#94a3b8; background:#f8fafc; border-radius:8px;">
+    Nothing yet.
+</div>
+{% endif %}
+
+<script>
+var ITEMS = {{ items_json | safe }};
+var chosen = null;
+
+function showResults(list) {
+    var box = document.getElementById('itemResults');
+    if (!list.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div style="position:absolute; z-index:40; left:0; right:0; background:#fff;' +
+        ' border:1px solid #cbd5e1; border-radius:6px; max-height:240px; overflow:auto;' +
+        ' box-shadow:0 4px 12px rgba(0,0,0,.08);">' +
+        list.map(function (it, i) {
+            return '<div class="item-hit" data-i="' + i + '" style="padding:8px 11px; cursor:pointer;' +
+                   ' border-bottom:1px solid #f1f5f9;">' +
+                   '<strong>' + it.code + '</strong> — ' + (it.desc || '') +
+                   '<span style="color:#94a3b8;"> (' + (it.unit || 'no unit') + ')</span></div>';
+        }).join('') + '</div>';
+    box.querySelectorAll('.item-hit').forEach(function (el) {
+        el.onmouseover = function () { el.style.background = '#f1f5f9'; };
+        el.onmouseout  = function () { el.style.background = '#fff'; };
+        el.onclick = function () { pick(list[+el.dataset.i]); };
+    });
+}
+
+function pick(it) {
+    chosen = it;
+    document.getElementById('itemSearch').value = it.code + ' — ' + (it.desc || '');
+    document.getElementById('itemId').value = it.item_id;
+    document.getElementById('itemResults').innerHTML = '';
+    document.getElementById('itemStock').innerHTML = it.unit
+        ? 'Held in <strong>' + it.unit + '</strong>'
+        : '<span style="color:#b45309;">This item has no stock unit set — ' +
+          'a conversion cannot be defined against nothing. Set its unit first.</span>';
+    updateReadout();
+}
+
+document.getElementById('itemSearch').addEventListener('input', function () {
+    var q = this.value.trim().toLowerCase();
+    chosen = null;
+    document.getElementById('itemId').value = '';
+    document.getElementById('itemStock').innerHTML = '';
+    updateReadout();
+    if (q.length < 2) { showResults([]); return; }
+    showResults(ITEMS.filter(function (it) {
+        return it.code.toLowerCase().indexOf(q) !== -1 ||
+               (it.desc || '').toLowerCase().indexOf(q) !== -1;
+    }).slice(0, 12));
+});
+
+// The whole point of this box: nobody can check "290566 / 10000000", but
+// everybody in stores knows roughly how far a kilo of wire goes.
+function updateReadout() {
+    var box = document.getElementById('readout');
+    var sel = document.getElementById('altUnit');
+    var alt = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text.split(' — ')[0] : '';
+    var num = parseFloat(document.getElementById('numIn').value);
+    var den = parseFloat(document.getElementById('denIn').value);
+
+    if (!chosen || !chosen.unit || !alt || !(num > 0) || !(den > 0)) {
+        box.style.background = '#f1f5f9';
+        box.style.color = '#64748b';
+        box.innerHTML = 'Pick an item and a unit to see what the numbers mean.';
+        return;
+    }
+    if (alt === chosen.unit) {
+        box.style.background = '#fef2f2';
+        box.style.color = '#991b1b';
+        box.innerHTML = 'That is the unit the item is already held in — nothing to convert.';
+        return;
+    }
+    var perAlt   = num / den;
+    var perStock = den / num;
+    box.style.background = '#f0fdf4';
+    box.style.color = '#166534';
+    box.innerHTML = '<strong>1 ' + alt + ' = ' + (+perAlt.toFixed(6)) + ' ' + chosen.unit + '</strong>' +
+                    '<span style="color:#15803d;"> &nbsp;·&nbsp; 1 ' + chosen.unit + ' = ' +
+                    (+perStock.toFixed(4)) + ' ' + alt + '</span>' +
+                    '<div style="font-size:12px; margin-top:4px; color:#15803d;">' +
+                    'Read that back before saving. If it sounds wrong, it is wrong.</div>';
+}
+
+['altUnit', 'numIn', 'denIn'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', updateReadout);
+    document.getElementById(id).addEventListener('change', updateReadout);
+});
+
+document.getElementById('convForm').addEventListener('submit', function (e) {
+    if (!document.getElementById('itemId').value) {
+        e.preventDefault();
+        alert('Pick an item from the list.');
+    }
+});
+</script>
+{% endblock %}

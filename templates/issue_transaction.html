@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / Issue Transaction
+</div>
+
+<div class="page-header" style="display: flex; justify-content: space-between; align-items: center;">
+    <h1>Issue Transaction History</h1>
+    <button type="button" class="btn btn-primary" onclick="openAddIssueModal()" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+        <span>+</span> New Manual Issue
+    </button>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<!-- Top Summary Cards -->
+<div style="margin-bottom: 24px; display: flex; gap: 16px; flex-wrap: wrap;">
+    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px 24px; display: flex; align-items: center; gap: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.04); min-width: 260px; flex: 1; max-width: 380px;">
+        <div style="width: 48px; height: 48px; border-radius: 10px; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0;">
+            📋
+        </div>
+        <div>
+            <div style="font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Total Issue Records</div>
+            <div style="font-size: 24px; font-weight: 700; color: #0f172a; margin-top: 2px;">
+                {{ total_transactions }}
+                <span style="font-size: 13px; font-weight: 500; color: #64748b; margin-left: 4px;">entries</span>
+            </div>
+        </div>
+    </div>
+
+    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px 24px; display: flex; align-items: center; gap: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.04); min-width: 260px; flex: 1; max-width: 380px;">
+        <div style="width: 48px; height: 48px; border-radius: 10px; background: #f0fdf4; color: #16a34a; display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0;">
+            📤
+        </div>
+        <div>
+            <div style="font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Total Quantity Issued</div>
+            <div style="font-size: 24px; font-weight: 700; color: #0f172a; margin-top: 2px;">
+                {{ "{:,}".format(total_qty_issued) }}
+                <span style="font-size: 13px; font-weight: 500; color: #64748b; margin-left: 4px;">units</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Search / Filter Bar -->
+<div class="filter-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <form method="get" action="/issue-transaction" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="search" placeholder="Search item code / description / issued to / user..."
+               value="{{ search }}" class="search-input" style="width: 340px;">
+        <button type="submit" class="btn-dark">Search</button>
+        <a href="/issue-transaction" class="btn-outline">Clear</a>
+    </form>
+</div>
+
+<!-- Issue Transaction History Table -->
+<div class="table-wrapper">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th style="width: 50px;">#</th>
+                <th style="min-width: 110px;">Date</th>
+                <th style="min-width: 140px;">Item Number</th>
+                <th style="min-width: 220px;">Description of Item</th>
+                <th style="min-width: 150px;">Type of Item</th>
+                <th style="min-width: 130px;">Quantity Issued</th>
+                <th style="min-width: 200px;">Issued To</th>
+                <th style="min-width: 120px;">Issued By</th>
+                <th style="min-width: 180px;">Remarks</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if issues %}
+            {% for issue in issues %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>
+                    <span style="font-weight: 600; color: #334155;">
+                        {{ issue.issue_date.strftime('%d-%m-%Y') if issue.issue_date else '—' }}
+                    </span>
+                </td>
+                <td>
+                    <strong>{{ issue.item_code }}</strong>
+                </td>
+                <td>{{ issue.item_desc or '—' }}</td>
+                <td>
+                    {% if issue.mpn and issue.manufacturer_name %}
+                        <span style="font-size: 12px; color: #475569;">{{ issue.mpn }} ({{ issue.manufacturer_name }})</span>
+                    {% elif issue.mpn %}
+                        <span style="font-size: 12px; color: #475569;">{{ issue.mpn }}</span>
+                    {% elif issue.manufacturer_name %}
+                        <span style="font-size: 12px; color: #475569;">{{ issue.manufacturer_name }}</span>
+                    {% else %}
+                        <span style="color: #94a3b8;">—</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <span style="font-weight: 700; color: #0284c7;">
+                        {{ issue.qty_issued }} {{ issue.unit or '' }}
+                    </span>
+                </td>
+                <td>
+                    {% if issue.issued_to %}
+                        <span style="font-weight: 600; color: #1e293b;">{{ issue.issued_to }}</span>
+                    {% endif %}
+                    {% if issue.wo_number %}
+                        <div><span class="badge badge-open" style="font-size: 11px; margin-top: 2px;">WO #{{ issue.wo_number }}</span></div>
+                    {% endif %}
+                    {% if not issue.issued_to and not issue.wo_number %}
+                        <span style="color: #94a3b8;">—</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <span style="font-size: 13px; color: #475569;">
+                        👤 {{ issue.issued_by or 'admin' }}
+                    </span>
+                </td>
+                <td>
+                    {% if issue.remarks %}
+                        <span style="font-size: 12px; color: #475569;">{{ issue.remarks }}</span>
+                    {% else %}
+                        <span style="color: #cbd5e1;">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr>
+                <td colspan="9" style="text-align:center; color:#888; padding:40px;">No issue transactions recorded yet.</td>
+            </tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Manual Issue Modal -->
+<div id="addIssueModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center; backdrop-filter: blur(2px);">
+    <div style="background:#fff; border-radius:12px; padding:28px; width:540px; max-width:92%; box-shadow:0 10px 30px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 20px;">
+            <h3 style="font-size:18px; font-weight:700; color:#1a2e4a; margin:0;">
+                📤 Add Manual Issue Transaction
+            </h3>
+            <button type="button" onclick="closeAddIssueModal()" style="background:none; border:none; font-size:22px; cursor:pointer; color:#64748b; font-weight:bold;">✕</button>
+        </div>
+
+        <form method="POST" action="/issue-transaction">
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Issue Date <span style="color:red;">*</span></label>
+                <input type="date" name="issue_date" value="{{ today }}" required class="input-field" style="width:100%; box-sizing: border-box;">
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <label for="modal_item_search" style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">🔍 Quick Search Item</label>
+                <input type="text" id="modal_item_search" class="input-field" placeholder="Type item code or description..." onkeyup="filterModalItemDropdown()" style="width: 100%; font-size: 13px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 7px 10px; margin-bottom: 8px; box-sizing: border-box;">
+
+                <label for="modal_item_id" style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Select Item <span style="color:red;">*</span></label>
+                <select id="modal_item_id" name="item_id" required class="input-field" style="width: 100%; font-size: 13px; background: #fff; box-sizing: border-box;">
+                    <option value="">— Select Item —</option>
+                    {% for item in items_list %}
+                    <option value="{{ item.item_id }}" data-search="{{ item.item_code }} {{ item.desc or '' }} {{ item.mpn or '' }}">
+                        {{ item.item_code }} - {{ item.desc or 'No description' }} {% if item.mpn %}(MPN: {{ item.mpn }}){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                <span id="modal_search_count" style="font-size: 11px; color: #2563eb; font-weight: 600; margin-top: 4px; display: block;"></span>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Quantity Issued <span style="color:red;">*</span></label>
+                <input type="number" step="any" min="0.0001" name="qty_issued" placeholder="e.g. 10" required class="input-field" style="width:100%; box-sizing: border-box;">
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Issued To (Person / Department / Line)</label>
+                <input type="text" name="issued_to" placeholder="e.g. Production Dept / Assembly Line / John Doe" class="input-field" style="width:100%; box-sizing: border-box;">
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Work Order Reference <span style="font-size: 11px; color: #64748b; font-weight: normal;">(Optional)</span></label>
+                <select name="wo_id" class="input-field" style="width:100%; font-size: 13px; background: #fff; box-sizing: border-box;">
+                    <option value="">— None / Direct Issue —</option>
+                    {% for wo in work_orders_list %}
+                    <option value="{{ wo.wo_id }}">WO #{{ wo.wo_number }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Issued By</label>
+                <input type="text" name="issued_by" value="{{ session['full_name'] or session['username'] or 'admin' }}" required class="input-field" style="width:100%; box-sizing: border-box;">
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 4px;">Remarks / Purpose</label>
+                <textarea name="remarks" rows="2" placeholder="Optional notes regarding this issue entry..." class="input-field" style="width:100%; box-sizing: border-box;"></textarea>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
+                <button type="button" class="btn btn-outline" onclick="closeAddIssueModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="padding:8px 22px;">Save Transaction</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openAddIssueModal() {
+    document.getElementById('addIssueModal').style.display = 'flex';
+}
+function closeAddIssueModal() {
+    document.getElementById('addIssueModal').style.display = 'none';
+}
+function filterModalItemDropdown() {
+    const searchVal = (document.getElementById('modal_item_search').value || '').toLowerCase().trim();
+    const select = document.getElementById('modal_item_id');
+    const options = select.options;
+    const badge = document.getElementById('modal_search_count');
+    
+    let visibleCount = 0;
+    let firstMatchIndex = -1;
+
+    for (let i = 1; i < options.length; i++) {
+        const searchText = (options[i].getAttribute('data-search') || options[i].text).toLowerCase();
+        if (!searchVal || searchText.includes(searchVal)) {
+            options[i].style.display = "";
+            options[i].disabled = false;
+            visibleCount++;
+            if (firstMatchIndex === -1) firstMatchIndex = i;
+        } else {
+            options[i].style.display = "none";
+            options[i].disabled = true;
+        }
+    }
+
+    if (searchVal) {
+        badge.innerText = `Found ${visibleCount} matching item(s)`;
+        if (firstMatchIndex !== -1 && visibleCount > 0) {
+            select.selectedIndex = firstMatchIndex;
+        }
+    } else {
+        badge.innerText = "";
+    }
+}
+</script>
+{% endblock %}

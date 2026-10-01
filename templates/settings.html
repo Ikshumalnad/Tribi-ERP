@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / Settings
+</div>
+
+<div class="page-header">
+    <h1>Settings & User Management</h1>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<!-- Financial Year Configuration Card -->
+<div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; margin-bottom: 28px; box-shadow: 0 2px 4px rgba(0,0,0,0.03);">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+        <div>
+            <h3 style="font-size: 16px; font-weight: 600; color: #1a2e4a; margin-bottom: 4px;">
+                📅 Financial Year Configuration
+            </h3>
+            <p style="font-size: 13px; color: #64748b; margin: 0;">
+                Configure the system financial year. Generated Work Order (WO), Purchase Order (PO), and GRN numbers will adapt to this financial year.
+            </p>
+        </div>
+        <div style="background: #e0f2fe; color: #0369a1; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;">
+            Active FY: <strong>{{ fy.current_fy_label if fy else 'Auto' }}</strong>
+        </div>
+    </div>
+
+    <form method="POST" action="/settings/financial-year">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+            <input type="checkbox" id="custom_enabled" name="custom_enabled" value="1" {% if fy and fy.custom_enabled == '1' %}checked{% endif %} style="width: 18px; height: 18px; cursor: pointer;">
+            <label for="custom_enabled" style="font-weight: 600; font-size: 14px; color: #1e293b; cursor: pointer;">
+                Enable Custom Financial Year
+            </label>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px;">
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">Start Month & Year</label>
+                <div style="display: flex; gap: 8px;">
+                    <select name="start_month" class="input-field" style="flex: 1;">
+                        {% for m in ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] %}
+                        <option value="{{ m }}" {% if fy and fy.start_month == m %}selected{% endif %}>{{ m }}</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" name="start_year" class="input-field" placeholder="e.g. 2027" value="{{ fy.start_year if fy else '2027' }}" style="width: 100px;" min="2000" max="2100" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">End Month & Year</label>
+                <div style="display: flex; gap: 8px;">
+                    <select name="end_month" class="input-field" style="flex: 1;">
+                        {% for m in ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] %}
+                        <option value="{{ m }}" {% if fy and fy.end_month == m %}selected{% endif %}>{{ m }}</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" name="end_year" class="input-field" placeholder="e.g. 2028" value="{{ fy.end_year if fy else '2028' }}" style="width: 100px;" min="2000" max="2100" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">GRN Number Format</label>
+                <select name="grn_format" class="input-field">
+                    <option value="start_year" {% if fy and fy.grn_format == 'start_year' %}selected{% endif %}>Use Start Year (e.g. GRN-2027-0001)</option>
+                    <option value="full_range" {% if fy and fy.grn_format == 'full_range' %}selected{% endif %}>Use Full Range (e.g. GRN-2027-2028-0001)</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 18px; margin-top: 20px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #475569;">
+            <div><strong>Sample WO Number:</strong> <code style="background:#e2e8f0; padding:2px 6px; border-radius:4px; color:#0f172a;">2537/{{ fy.current_fy_label if fy else '2027-2028' }}</code></div>
+            <div><strong>Sample PO Number:</strong> <code style="background:#e2e8f0; padding:2px 6px; border-radius:4px; color:#0f172a;">{{ fy.current_fy_label if fy else '2027-2028' }}/0001.0</code></div>
+            <div><strong>Sample GRN Number:</strong> <code style="background:#e2e8f0; padding:2px 6px; border-radius:4px; color:#0f172a;">GRN-{{ fy.current_fy_start if fy and fy.grn_format != 'full_range' else (fy.current_fy_label if fy else '2027') }}-0001</code></div>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <button type="submit" class="btn btn-primary">Save Financial Year Settings</button>
+        </div>
+    </form>
+</div>
+
+<!-- Policy Number & Insurance Configuration Card -->
+<div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; margin-bottom: 28px; box-shadow: 0 2px 4px rgba(0,0,0,0.03);">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+        <div>
+            <h3 style="font-size: 16px; font-weight: 600; color: #1a2e4a; margin-bottom: 4px;">
+                🛡️ Policy Number & Insurance Configuration
+            </h3>
+            <p style="font-size: 13px; color: #64748b; margin: 0;">
+                Configure the policy line and implementation expiration date. This policy text will be centered under the Terms & Conditions and Authorised Signatory box on all generated PO PDFs.
+            </p>
+        </div>
+        <div>
+            {% if policy_expired_alert %}
+            <span style="background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;">
+                ⚠️ Policy Expired
+            </span>
+            {% else %}
+            <span style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;">
+                ✓ Active Policy (Valid till {{ policy.expiration_date }})
+            </span>
+            {% endif %}
+        </div>
+    </div>
+
+    <form method="POST" action="/settings/policy">
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 20px;">
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">Policy Line Text <span style="color:red;">*</span></label>
+                <input type="text" name="policy_line_text" class="input-field" value="{{ policy.line_text }}" required placeholder="e.g. COVERED UNDER NEW INDIA ASSURANCE POLICY NO. 67020021200200000030" style="width: 100%; font-weight: 600; color: #0f172a;">
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">Implementation Expiration Date <span style="color:red;">*</span></label>
+                <input type="date" name="policy_expiration_date" class="input-field" value="{{ policy.expiration_date }}" required style="width: 100%; font-weight: 600; color: #0f172a;">
+            </div>
+        </div>
+
+        <div>
+            <button type="submit" class="btn btn-primary">Save Policy Settings</button>
+        </div>
+    </form>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; margin-bottom: 40px;">
+    
+    <!-- Create User Card -->
+    <div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; height: fit-content;">
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-bottom: 18px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
+            Create New User
+        </h3>
+        
+        <form method="POST" action="/settings/user/add">
+            <div class="form-group">
+                <label for="new_username">Username <span style="color:red;">*</span></label>
+                <input type="text" id="new_username" name="username" required placeholder="Enter username" style="width: 100%;">
+            </div>
+            
+            <div class="form-group">
+                <label for="new_password">Password <span style="color:red;">*</span></label>
+                <input type="password" id="new_password" name="password" required placeholder="Enter password" style="width: 100%;">
+            </div>
+            
+            <div class="form-group">
+                <label for="new_fullname">Full Name <span style="color:red;">*</span></label>
+                <input type="text" id="new_fullname" name="full_name" required placeholder="Enter full name" style="width: 100%;">
+            </div>
+            
+            <div class="form-group">
+                <label for="new_role">User Role <span style="color:red;">*</span></label>
+                <select id="new_role" name="role" required style="width: 100%;">
+                    <option value="staff">Staff</option>
+                    <option value="approver">Approver</option>
+                    <option value="admin">Administrator</option>
+                </select>
+            </div>
+            
+            <div style="margin-top: 24px;">
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Create User Account</button>
+            </div>
+        </form>
+    </div>
+    
+    <!-- User Directory List -->
+    <div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px;">
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-bottom: 18px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
+            User Directory
+        </h3>
+        
+        <div style="overflow-x: auto;">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Full Name</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Created At</th>
+                        <th>Last Login</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users_list %}
+                    <tr>
+                        <td><strong>{{ u.username }}</strong></td>
+                        <td>{{ u.full_name or '—' }}</td>
+                        <td>
+                            <span class="badge {% if u.role == 'admin' %}badge-active{% elif u.role == 'approver' %}badge-inprogress{% else %}badge-open{% endif %}" style="text-transform: uppercase; font-size: 11px;">
+                                {{ u.role }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if u.is_active %}
+                            <span style="color: #27ae60; font-weight: 600; font-size: 13px;">● Active</span>
+                            {% else %}
+                            <span style="color: #95a5a6; font-weight: 600; font-size: 13px;">○ Inactive</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 13px; color: #666;">
+                            {{ u.created_at.strftime('%d-%m-%Y') if u.created_at else '—' }}
+                        </td>
+                        <td style="font-size: 13px; color: #666;">
+                            {{ u.last_login.strftime('%d-%m-%Y %H:%M') if u.last_login else 'Never' }}
+                        </td>
+                        <td style="white-space: nowrap;">
+                            {% if session['role'] == 'admin' or session['user_id'] == u.user_id %}
+                            <button type="button" class="btn btn-dark btn-sm"
+                                    onclick="openEditUserModal({{ u.user_id }}, '{{ u.username }}', '{{ u.full_name or "" }}', '{{ u.role }}', {{ u.is_active or 0 }})">
+                                ✏️ Edit
+                            </button>
+                            {% else %}
+                            <span style="font-size: 11px; color: #94a3b8; font-style: italic;" title="Only accessible by account owner or Admin">
+                                Restricted
+                            </span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+</div>
+
+<!-- Edit User Modal -->
+<div id="editUserModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center; backdrop-filter: blur(2px);">
+    <div style="background:#fff; border-radius:12px; padding:28px; width:460px; max-width:92%; box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 20px;">
+            <h3 style="font-size:16px; font-weight:700; color:#1a2e4a; margin:0;">
+                ✏️ Edit User Account
+            </h3>
+            <button type="button" onclick="closeEditUserModal()" style="background:none; border:none; font-size:20px; cursor:pointer; color:#64748b;">✕</button>
+        </div>
+
+        <form method="POST" id="editUserForm" action="">
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">Username <span style="color:red;">*</span></label>
+                <input type="text" id="edit_username" name="username" required class="input-field" style="width:100%;">
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">Full Name <span style="color:red;">*</span></label>
+                <input type="text" id="edit_fullname" name="full_name" required class="input-field" style="width:100%;">
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">Change Password</label>
+                <input type="password" name="new_password" placeholder="Leave blank to keep current password" class="input-field" style="width:100%;">
+                <span style="font-size: 11px; color: #64748b; margin-top: 2px; display: block;">Only fill this if you want to change the password.</span>
+            </div>
+
+            {% if session['role'] == 'admin' %}
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 13px;">User Role <span style="color:red;">*</span></label>
+                <select id="edit_role" name="role" required class="input-field" style="width:100%;">
+                    <option value="staff">Staff</option>
+                    <option value="approver">Approver</option>
+                    <option value="admin">Administrator</option>
+                </select>
+            </div>
+
+            <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="edit_is_active" name="is_active" value="1" style="width:16px; height:16px; cursor:pointer;">
+                <label for="edit_is_active" style="font-weight: 600; font-size: 13px; cursor:pointer; margin:0;">
+                    Account Active Status
+                </label>
+            </div>
+            {% endif %}
+
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
+                <button type="button" class="btn btn-outline" onclick="closeEditUserModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="padding:8px 20px;">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditUserModal(userId, username, fullName, role, isActive) {
+    document.getElementById('editUserForm').action = '/settings/user/' + userId + '/edit';
+    document.getElementById('edit_username').value = username;
+    document.getElementById('edit_fullname').value = fullName;
+    
+    const roleSelect = document.getElementById('edit_role');
+    if (roleSelect) roleSelect.value = role;
+
+    const activeCheck = document.getElementById('edit_is_active');
+    if (activeCheck) activeCheck.checked = (isActive == 1);
+
+    document.getElementById('editUserModal').style.display = 'flex';
+}
+
+function closeEditUserModal() {
+    document.getElementById('editUserModal').style.display = 'none';
+}
+</script>
+
+{% endblock %}

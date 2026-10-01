@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>New Storage Entry</h1>
+    <a href="/storage" class="btn-outline">← Back</a>
+</div>
+
+<div class="form-card">
+    <form method="post" action="/storage/add">
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Item Code <span class="required">*</span></label>
+                <input type="text" id="item_search_input" class="input-field" list="items-list" placeholder="Type item code..." required autocomplete="off">
+                <datalist id="items-list">
+                    {% for it in items %}
+                    <option data-id="{{ it.item_id }}" value="{{ it.item_code }}">{{ it.item_desc or '' }}</option>
+                    {% endfor %}
+                </datalist>
+                <input type="hidden" name="item_id" id="item_id" required>
+            </div>
+            <div class="form-group">
+                <label>Store Location <span class="required">*</span></label>
+                <input type="text" name="store_location" id="store_location_input" class="input-field" placeholder="e.g. Rack A-3" required>
+                <div id="location_notice" style="display: none; font-size: 12px; color: #2563eb; margin-top: 6px; font-weight: 600;"></div>
+            </div>
+            <div class="form-group">
+                <label>Physical Store Availability <span class="required">*</span></label>
+                <input type="number" name="physical_availability" class="input-field" step="0.001" min="0" value="0" required>
+            </div>
+        </div>
+
+        <div style="display:flex; gap:12px; margin-top:24px;">
+            <button type="submit" class="btn-primary">Save Storage Entry</button>
+            <a href="/storage" class="btn-outline">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('item_search_input');
+    const hiddenInput = document.getElementById('item_id');
+    const locationInput = document.getElementById('store_location_input');
+    const locationNotice = document.getElementById('location_notice');
+    const datalist = document.getElementById('items-list');
+
+    let currentItemId = '';
+
+    function checkStorageLocation(itemId) {
+        if (!itemId) {
+            locationInput.readOnly = false;
+            locationInput.style.backgroundColor = '';
+            locationNotice.style.display = 'none';
+            return;
+        }
+
+        fetch('/api/item-storage-location/' + itemId)
+            .then(res => res.json())
+            .then(data => {
+                if (data.exists) {
+                    locationInput.value = data.location;
+                    locationInput.readOnly = true;
+                    locationInput.style.backgroundColor = '#f1f5f9';
+                    locationNotice.innerText = '🔒 Item already assigned to location "' + data.location + '" (' + data.physical_availability + ' in stock). New quantity will be added to this location.';
+                    locationNotice.style.display = 'block';
+                } else {
+                    if (locationInput.readOnly) {
+                        locationInput.readOnly = false;
+                        locationInput.style.backgroundColor = '';
+                        locationInput.value = '';
+                    }
+                    locationNotice.style.display = 'none';
+                }
+            })
+            .catch(err => {
+                console.error('Error fetching item location:', err);
+            });
+    }
+
+    function validateInput() {
+        const val = searchInput.value;
+        const options = datalist.options;
+        let matchedId = '';
+        
+        for (let i = 0; i < options.length; i++) {
+            if (options[i].value === val) {
+                matchedId = options[i].getAttribute('data-id');
+                break;
+            }
+        }
+        
+        hiddenInput.value = matchedId;
+        
+        if (matchedId !== currentItemId) {
+            currentItemId = matchedId;
+            checkStorageLocation(matchedId);
+        }
+        
+        if (val === '') {
+            searchInput.setCustomValidity('');
+        } else if (matchedId) {
+            searchInput.setCustomValidity('');
+        } else {
+            searchInput.setCustomValidity('Please select a valid item code from the list.');
+        }
+    }
+
+    searchInput.addEventListener('input', validateInput);
+    searchInput.addEventListener('change', validateInput);
+});
+</script>
+{% endblock %}
