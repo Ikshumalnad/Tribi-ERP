@@ -22,10 +22,17 @@
         a blank row beneath it does no harm.
         <div style="margin-top:10px; font-size:13px;">
             Recognised headings — <code>short_name</code>, <code>full_name</code>,
-            <code>gst_no</code>, <code>address_line_1</code>, <code>pincode</code>,
-            <code>city</code>, <code>state</code>, <code>country</code>,
-            <code>ph_no</code>, <code>email</code>. Spelling is matched loosely,
-            so <code>GST No</code> and <code>GSTIN</code> both work.
+            <code>gst_no</code>, <code>address_line_1</code> through
+            <code>address_line_4</code>, <code>ph_no</code> and
+            <code>email_id</code>. Spelling is matched loosely, so
+            <code>GST No</code> and <code>GSTIN</code> both work.
+            <div style="margin-top:6px;">
+                The address is four free-text lines. <code>city</code>,
+                <code>pincode</code> and <code>country</code> are no longer
+                separate columns — put them in whichever line they belong on,
+                and a file that still has those headings will say so rather
+                than dropping them quietly.
+            </div>
         </div>
         <div style="margin-top:10px; font-size:13px; color:#64748b;">
             Vendors are matched on <strong>short name</strong>. An existing vendor is
@@ -95,6 +102,28 @@
 </div>
 {% endif %}
 
+{% if preview.unknown_currency_ids %}
+<div class="alert" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b;">
+    <strong>The file uses currency ids that are not in the currency table.</strong>
+    These rows cannot import — the foreign key will refuse them:
+    <div style="margin-top:6px; font-size:13px;">
+        {% for c in preview.unknown_currency_ids %}<code>{{ c.currency_id }}</code> on {{ c.vendors }} vendor{{ '' if c.vendors == 1 else 's' }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if preview.currency_use %}
+<div class="alert" style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155;">
+    <strong>Currencies in this file.</strong>
+    The spreadsheet carries the id, not the code, so check these read the way
+    you expect before importing — a wrong id imports cleanly and then prices
+    in the wrong money.
+    <div style="margin-top:6px; font-size:13px;">
+        {% for c in preview.currency_use %}<code>{{ c.currency_id }}</code> = {{ c.code }} ({{ c.name }}) — {{ c.vendors }} vendor{{ '' if c.vendors == 1 else 's' }}{% if not loop.last %}; {% endif %}{% endfor %}
+    </div>
+</div>
+{% endif %}
+
 {% if preview.fields_with_no_column %}
 <div class="alert" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
     <strong>The file carries information the vendor table has nowhere to put.</strong>
@@ -151,8 +180,7 @@
         <thead>
             <tr>
                 <th>Short name</th><th>Full name</th><th>GST</th>
-                <th>Address</th><th>City</th><th>Pincode</th>
-                <th>Country</th><th>Phone</th>
+                <th>Address</th><th>Phone</th><th>Email</th>
             </tr>
         </thead>
         <tbody>
@@ -161,11 +189,14 @@
                 <td><strong>{{ r.short_name or '—' }}</strong></td>
                 <td>{{ r.full_name or '—' }}</td>
                 <td>{{ r.gst_no or '—' }}</td>
-                <td>{{ r.address_line_1 or '—' }}</td>
-                <td>{{ r.city or '—' }}</td>
-                <td>{{ r.pincode or '—' }}</td>
-                <td>{{ r.country or '—' }}</td>
+                <td>
+                    {% set lines = [r.address_line_1, r.address_line_2,
+                                    r.address_line_3, r.address_line_4] | select | list %}
+                    {% for l in lines %}{{ l }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                    {% if not lines %}—{% endif %}
+                </td>
                 <td>{{ r.ph_no or '—' }}</td>
+                <td>{{ r.email_id or '—' }}</td>
             </tr>
         {% endfor %}
         </tbody>

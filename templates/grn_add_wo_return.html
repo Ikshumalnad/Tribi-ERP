@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
+<datalist id="known_locations">
+    {% for l in (locations or []) %}<option value="{{ l }}">{% endfor %}
+</datalist>
+
 <div class="page-header" style="max-width: 1100px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center;">
     <h1>{% if is_convert %}Modify GRN Type — {{ grn_no }}{% else %}New Back To Store GRN — {{ grn_no }}{% endif %}</h1>
     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
@@ -90,6 +94,7 @@
                             <th style="min-width: 220px;">Item Description</th>
                             <th style="width: 110px;">Qty Required</th>
                             <th style="width: 140px;">Qty Received <span style="color:red;">*</span></th>
+                            <th style="width: 150px;">Store Location</th>
                             <th>Remarks</th>
                         </tr>
                     </thead>
@@ -208,6 +213,12 @@ function renderTables() {
                 <td>${item.qty_required} ${item.unit || ''}</td>
                 <td>
                     <input type="number" step="any" min="0" name="qty_received[]" class="input-field" value="${item.qty_received}" onchange="updateItemQty(${item.item_id}, this.value)" required style="width: 100%; font-weight: 600;">
+                </td>
+                <td>
+                    <input type="text" name="location[]" class="input-field" list="known_locations"
+                           value="${item.store_location || ''}"
+                           placeholder="Rack / bin (optional)"
+                           style="width: 100%; box-sizing: border-box;">
                 </td>
                 <td>
                     <input type="text" name="line_remarks[]" class="input-field" value="${item.remarks}" onchange="updateItemRemarks(${item.item_id}, this.value)" placeholder="Item return notes..." style="width: 100%;">

@@ -49,12 +49,13 @@
 
             <div class="form-group">
                 <label>Currency <span style="color:red;">*</span></label>
-                <select name="currency" required id="currencySelect" onchange="updateCurrencySymbols()">
-                    <option value="INR" {% if po.currency == 'INR' or not po.currency %}selected{% endif %}>INR (₹)</option>
-                    <option value="USD" {% if po.currency == 'USD' %}selected{% endif %}>USD ($)</option>
-                    <option value="EUR" {% if po.currency == 'EUR' %}selected{% endif %}>EUR (€)</option>
-                    <option value="GBP" {% if po.currency == 'GBP' %}selected{% endif %}>GBP (£)</option>
+                <select name="currency" required id="currencySelect"
+                        onchange="updateCurrencySymbols(); currencyTouched = true;">
+                    {% for c in currencies %}
+                    <option value="{{ c.curr_code }}" {% if c.curr_code == po.currency or (not po.currency and c.curr_code == 'INR') %}selected{% endif %}>{{ c.curr_code }} — {{ c.curr_name }}</option>
+                    {% endfor %}
                 </select>
+                <div id="currencyNote" style="font-size: 11px; color: #64748b; margin-top: 4px;"></div>
             </div>
 
             {% if is_amend %}
@@ -83,10 +84,11 @@
             <table class="data-table" id="itemsTable">
                 <thead>
                     <tr>
-                        <th style="width: 45%;">Item <span style="color:red;">*</span></th>
-                        <th style="width: 20%;">Qty <span style="color:red;">*</span></th>
-                        <th style="width: 20%;">Unit Price <span style="color:red;">*</span></th>
-                        <th style="width: 15%;">Unit <span style="color:red;">*</span></th>
+                        <th style="width: 34%;">Item <span style="color:red;">*</span></th>
+                        <th style="width: 18%;">HSN <span style="color:red;">*</span></th>
+                        <th style="width: 15%;">Qty <span style="color:red;">*</span></th>
+                        <th style="width: 18%;">Unit Price <span style="color:red;">*</span></th>
+                        <th style="width: 12%;">Unit <span style="color:red;">*</span></th>
                         <th style="width: 40px;"></th>
                     </tr>
                 </thead>
@@ -311,6 +313,9 @@ const allItems = {{ items | tojson }};
 const allVendors = {{ vendors | tojson }};
 const vendorItemsData = {{ vendor_items | tojson }};
 const unitsData = {{ units | tojson }};
+const hsnData = {{ hsns | tojson }};
+const currencySymbolsByCode = {'INR':'\u20b9','USD':'$','EUR':'\u20ac','GBP':'\u00a3','AED':'\u062f.\u0625','MYR':'RM'};
+let currencyTouched = true;
 
 // Map item_id to vendors who supply it
 const itemVendorsData = {};
@@ -602,6 +607,80 @@ function initSearchableSelect(selectEl, placeholder = "Search...") {
     });
 }
 
+// The HSN cell shows the item's own code when it has one and asks for one
+// when it does not. Either way the cell always submits exactly one hsn_id[],
+// so the server can line the HSN values up with item_id[] by position.
+let hsnSelectTemplate = null;
+function makeHsnSelect() {
+    if (!hsnSelectTemplate) {
+        hsnSelectTemplate = document.createElement('select');
+        hsnSelectTemplate.name = 'hsn_id[]';
+        hsnSelectTemplate.required = true;
+        hsnSelectTemplate.setAttribute('style',
+            'width: 100%; padding: 6px; border: 1px solid #f59e0b; border-radius: 4px; background: #fffbeb;');
+        const ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = '— Select HSN —';
+        hsnSelectTemplate.appendChild(ph);
+        hsnData.forEach(h => {
+            const opt = document.createElement('option');
+            opt.value = h.hsn_id;
+            const rate = (h.tax_rate === null || h.tax_rate === undefined)
+                       ? '' : (' — ' + Number(h.tax_rate).toFixed(2) + '%');
+            opt.textContent = h.hsn_code + rate + (h.description ? ' — ' + h.description : '');
+            hsnSelectTemplate.appendChild(opt);
+        });
+    }
+    return hsnSelectTemplate.cloneNode(true);
+}
+
+function setRowHsn(row, hsnId, hsnCode, hsnRate) {
+    const cell = row ? row.querySelector('.hsn-cell') : null;
+    if (!cell) return;
+    cell.innerHTML = '';
+
+    if (hsnId) {
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'hsn_id[]';
+        hidden.value = hsnId;
+        cell.appendChild(hidden);
+
+        const label = document.createElement('div');
+        label.style.cssText = 'font-size: 12px; color: #1a2e4a; font-weight: 600;';
+        label.textContent = hsnCode || '';
+        cell.appendChild(label);
+
+        if (hsnRate !== null && hsnRate !== undefined) {
+            const rate = document.createElement('div');
+            rate.style.cssText = 'font-size: 11px; color: #64748b;';
+            rate.textContent = Number(hsnRate).toFixed(2) + '% tax';
+            cell.appendChild(rate);
+        }
+        return;
+    }
+
+    const select = makeHsnSelect();
+    cell.appendChild(select);
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size: 11px; color: #b45309; margin-top: 3px;';
+    note.textContent = 'not set for this item — saved against it';
+    cell.appendChild(note);
+    initSearchableSelect(select, "Search HSN...");
+}
+
+// Used for the rows already on the order when the page opens. It asks ONLY
+// about the HSN: calling onItemChange here would overwrite the saved price
+// and unit with whatever the vendor lookup returns, which is not an edit
+// anybody asked for.
+function loadRowHsn(row, itemId) {
+    if (!row || !itemId) return;
+    fetch('/purchase-order/get-vendor-pricing?vendor_id=&item_id=' + encodeURIComponent(itemId))
+        .then(r => r.json())
+        .then(d => setRowHsn(row, d.hsn_id, d.hsn_code, d.hsn_rate))
+        .catch(() => setRowHsn(row, null, null, null));
+}
+
 function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
     const tbody = document.getElementById('itemsTableBody');
     const rowId = 'row-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
@@ -625,19 +704,17 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
     
     const currencySelect = document.getElementById('currencySelect');
     const currentCurrency = currencySelect ? currencySelect.value : 'INR';
-    const currencySymbols = {
-        'INR': '₹',
-        'USD': '$',
-        'EUR': '€',
-        'GBP': '£'
-    };
-    const symbol = currencySymbols[currentCurrency] || '₹';
+    const symbol = currencySymbolsByCode[currentCurrency] || currentCurrency;
 
     tr.innerHTML = `
         <td>
             <select name="item_id[]" required style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;" onchange="onItemChange(this)">
                 ${itemOptions}
             </select>
+        </td>
+        <td class="hsn-cell" style="vertical-align: middle;">
+            <input type="hidden" name="hsn_id[]" value="">
+            <span style="color: #94a3b8; font-size: 11px;">pick an item</span>
         </td>
         <td>
             <input type="number" name="qty_ordered[]" step="0.001" min="0.001" required value="${qty}" placeholder="0.000" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
@@ -662,19 +739,17 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
     
     const itemSelect = tr.querySelector('select[name="item_id[]"]');
     initSearchableSelect(itemSelect, "Search Item...");
+
+    if (itemId) loadRowHsn(tr, itemId);
 }
+
+document.addEventListener('DOMContentLoaded', applyVendorCurrency);
 
 function updateCurrencySymbols() {
     const select = document.getElementById('currencySelect');
     if (!select) return;
     const currency = select.value;
-    const currencySymbols = {
-        'INR': '₹',
-        'USD': '$',
-        'EUR': '€',
-        'GBP': '£'
-    };
-    const symbol = currencySymbols[currency] || '₹';
+    const symbol = currencySymbolsByCode[currency] || currency;
     document.querySelectorAll('.currency-symbol').forEach(span => {
         span.innerText = symbol;
     });
@@ -688,11 +763,13 @@ function onItemChange(selectElement) {
     const vendorId = vendorSelect ? vendorSelect.value : '';
     const row = selectElement.closest('tr');
     
-    if (vendorId) {
-        fetch(`/purchase-order/get-vendor-pricing?vendor_id=${vendorId}&item_id=${itemId}`)
+    // Asked for unconditionally: the HSN does not depend on the vendor, and a
+    // line still needs one even before a vendor is chosen.
+    fetch(`/purchase-order/get-vendor-pricing?vendor_id=${encodeURIComponent(vendorId)}&item_id=${itemId}`)
             .then(r => r.json())
             .then(data => {
-                if (data.success) {
+                setRowHsn(row, data.hsn_id, data.hsn_code, data.hsn_rate);
+                if (data.has_price_or_unit && vendorId) {
                     if (data.qty !== null && data.qty !== undefined && data.qty > 0) {
                         const qtyInput = row.querySelector('input[name="qty_ordered[]"]');
                         if (qtyInput && !qtyInput.value) qtyInput.value = data.qty;
@@ -711,11 +788,9 @@ function onItemChange(selectElement) {
             })
             .catch(err => {
                 console.error("Error fetching pricing:", err);
+                setRowHsn(row, null, null, null);
                 fallbackToDefaultUnit(selectElement);
             });
-    } else {
-        fallbackToDefaultUnit(selectElement);
-    }
 }
 
 function fallbackToDefaultUnit(selectElement) {
@@ -731,7 +806,32 @@ function fallbackToDefaultUnit(selectElement) {
     }
 }
 
+// A currency is a fact about the vendor — it is what they invoice in. On a
+// NEW order the form follows the vendor; here the order already has one that
+// somebody chose, so it is only replaced when the vendor is actually changed,
+// and never merely by opening the page.
+function applyVendorCurrency() {
+    const vendorSelect = document.querySelector('select[name="vendor_id"]');
+    const currencySelect = document.getElementById('currencySelect');
+    const note = document.getElementById('currencyNote');
+    if (!vendorSelect || !currencySelect) return;
+
+    const vendor = allVendors.find(v => String(v.vendor_id) === String(vendorSelect.value));
+    const code = vendor && vendor.curr_code ? vendor.curr_code : '';
+    if (!note) return;
+
+    if (!code) {
+        note.textContent = '';
+    } else if (code === currencySelect.value) {
+        note.textContent = vendor.short_name + ' invoices in ' + code + '.';
+    } else {
+        note.textContent = vendor.short_name + ' invoices in ' + code +
+            ', but this order is in ' + currencySelect.value + '. Change it if that is wrong.';
+    }
+}
+
 function onVendorChange() {
+    applyVendorCurrency();
     const itemSelects = document.querySelectorAll('select[name="item_id[]"]');
     itemSelects.forEach(select => {
         if (select.value !== "") {

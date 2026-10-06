@@ -402,6 +402,22 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
 
     table_data = [headers]
 
+    # How this vendor's tax is charged. It is a property of the VENDOR, not of
+    # the goods: the HSN code says what the rate is, this says how it is split.
+    #
+    #   1  registered in Karnataka      -> CGST + SGST, half the rate each
+    #   2  registered elsewhere in India-> IGST, the whole rate
+    #   0  outside India                -> no Indian GST on the invoice at all
+    #
+    # Default 1 when the column is absent, which is what the form assumed
+    # before the column existed.
+    try:
+        tax_mode = int(vendor.get('tax_mode'))
+    except (TypeError, ValueError):
+        tax_mode = 1
+    if tax_mode not in (0, 1, 2):
+        tax_mode = 1
+
     subtotal = 0.0
     total_cgst = 0.0
     total_sgst = 0.0
@@ -414,16 +430,33 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
         line_price = round(qty * unit_price, 4)
         subtotal += line_price
 
-        # Tax calculations
-        tax_rate = float(item.get('tax_rate') or 18.0)
-        cgst_rate = float(item.get('cgst') if item.get('cgst') is not None else tax_rate / 2.0)
-        sgst_rate = float(item.get('sgst') if item.get('sgst') is not None else tax_rate / 2.0)
-        igst_rate = float(item.get('igst') or 0.0)
+        # The HSN row carries cgst, sgst AND igst all filled in, because the
+        # rate is the same fact expressed two ways. Only one way applies to
+        # any given order, and the vendor decides which.
+        #
+        # `or 18.0` was wrong here: a genuine 0% HSN is falsy, so ten of the
+        # codes in the table were printing at 18%. None means "no rate known",
+        # zero means zero.
+        raw_rate = item.get('tax_rate')
+        tax_rate = 18.0 if raw_rate is None else float(raw_rate)
+
+        if tax_mode == 0:
+            cgst_rate = sgst_rate = igst_rate = 0.0
+            tax_rate = 0.0
+        elif tax_mode == 2:
+            cgst_rate = sgst_rate = 0.0
+            igst_rate = tax_rate
+        else:
+            cgst_rate = sgst_rate = round(tax_rate / 2.0, 2)
+            igst_rate = 0.0
 
         line_cgst = round(line_price * (cgst_rate / 100.0), 4)
         line_sgst = round(line_price * (sgst_rate / 100.0), 4)
         line_igst = round(line_price * (igst_rate / 100.0), 4)
-        line_tax = round(line_price * (tax_rate / 100.0), 4)
+        # Charged = what is actually added, which is the sum of the lines
+        # printed. Before, this was the full rate regardless, so the totals
+        # box never added up to the Total row.
+        line_tax = round(line_cgst + line_sgst + line_igst, 4)
 
         total_cgst += line_cgst
         total_sgst += line_sgst
@@ -432,10 +465,17 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
 
         line_total = line_price + line_tax
 
-        hsn_code = item.get('hsn_code') or '853400'
-        item_code_text = f"{item.get('item_code', '')}<br/>[HSN {hsn_code}]"
+        # An unclassified item used to print as HSN 853400 — printed circuit
+        # boards — whatever it actually was. Saying nothing is better than
+        # saying something untrue on a tax document.
+        hsn_code = item.get('hsn_code')
+        item_code_text = (f"{item.get('item_code', '')}<br/>[HSN {hsn_code}]"
+                          if hsn_code else f"{item.get('item_code', '')}<br/>[HSN not set]")
 
-        tax_text = f"{line_tax:.4f}<br/>[{tax_rate:.2f} %]"
+        if tax_mode == 0:
+            tax_text = "0.0000<br/>[not taxed]"
+        else:
+            tax_text = f"{line_tax:.4f}<br/>[{tax_rate:.2f} %]"
 
         row = [
             Paragraph(str(idx), cell_center),
@@ -475,19 +515,39 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
         Paragraph(instructions_text, cell_style)
     ]
 
+    # Only the lines that apply. All three used to print at once — an in-state
+    # split and an inter-state charge side by side — and they summed to twice
+    # the tax actually added, so the box never agreed with the Total beneath it.
     totals_table_data = [
         [Paragraph("Sub Total", cell_right), Paragraph(f"{subtotal:.4f}", cell_right)],
-        [Paragraph("CGST", cell_right), Paragraph(f"{total_cgst:.4f}", cell_right)],
-        [Paragraph("SGST", cell_right), Paragraph(f"{total_sgst:.4f}", cell_right)],
-        [Paragraph("IGST", cell_right), Paragraph(f"{total_igst:.4f}", cell_right)],
-        [Paragraph(f"<b>Total ({currency_symbol})</b>", cell_right), Paragraph(f"<b>{grand_total:.2f}</b>", ParagraphStyle('GrandTot', parent=cell_right, fontName='Helvetica-Bold', fontSize=9))],
     ]
+    if tax_mode == 1:
+        totals_table_data.append([Paragraph("CGST", cell_right),
+                                  Paragraph(f"{total_cgst:.4f}", cell_right)])
+        totals_table_data.append([Paragraph("SGST", cell_right),
+                                  Paragraph(f"{total_sgst:.4f}", cell_right)])
+    elif tax_mode == 2:
+        totals_table_data.append([Paragraph("IGST", cell_right),
+                                  Paragraph(f"{total_igst:.4f}", cell_right)])
+    else:
+        totals_table_data.append([Paragraph("GST", cell_right),
+                                  Paragraph("Not applicable", cell_right)])
+
+    total_row = len(totals_table_data)
+    totals_table_data.append(
+        [Paragraph(f"<b>Total ({currency_symbol})</b>", cell_right),
+         Paragraph(f"<b>{grand_total:.2f}</b>",
+                   ParagraphStyle('GrandTot', parent=cell_right,
+                                  fontName='Helvetica-Bold', fontSize=9))])
+
     totals_sub_table = Table(totals_table_data, colWidths=[100, 100])
     totals_sub_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('BOTTOMPADDING', (0,0), (-1,-1), 3),
         ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('LINEABOVE', (0,4), (1,4), 0.75, colors.black),
+        # The rule sat on row 4 whatever was above it. The box is a different
+        # height per mode now, so it follows the Total row.
+        ('LINEABOVE', (0,total_row), (1,total_row), 0.75, colors.black),
     ]))
 
     summary_block = Table(
@@ -519,6 +579,11 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
         Paragraph("<u>Terms & Conditions</u>", section_header),
         Spacer(1, 6),
     ]
+    if tax_mode == 0:
+        terms_lines.append(Paragraph(
+            "<b>No Indian GST is charged on this order — the supplier is "
+            "outside India.</b>", cell_style))
+        terms_lines.append(Spacer(1, 3))
     if custom_terms:
         # Split terms by newline and filter out empty lines
         terms_list = [line.strip() for line in custom_terms.split('\n') if line.strip()]

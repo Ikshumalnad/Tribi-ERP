@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .env
 scratch/
+.secret_key
+tribi_errors.log

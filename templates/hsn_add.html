@@ -25,9 +25,9 @@
             <label for="item_search_input">🔍 Quick Search / Filter Item</label>
             <input type="text" id="item_search_input" class="input-field" placeholder="Type item code or description to search..." onkeyup="filterItemDropdown()" style="width: 100%; font-size: 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px;">
 
-            <label for="item_id">Associated Item *</label>
-            <select id="item_id" name="item_id" required class="input-field" style="width: 100%; font-size: 14px; background: #fff;">
-                <option value="">-- Select Item --</option>
+            <label for="item_id">Associated Item</label>
+            <select id="item_id" name="item_id" class="input-field" style="width: 100%; font-size: 14px; background: #fff;">
+                <option value="">— No item —</option>
                 {% for item in items %}
                     <option value="{{ item.item_id }}" data-search="{{ item.item_code }} {{ item.desc or '' }}">
                         {{ item.item_code }} - {{ item.desc or '' }} {% if item.hsn_id and item.hsn_id != 1 %}(Has Custom HSN){% endif %}
@@ -35,6 +35,10 @@
                 {% endfor %}
             </select>
             <span id="search_count_badge" style="font-size: 11px; color: #2563eb; font-weight: 600; margin-top: 4px; display: block;"></span>
+            <span style="font-size: 11px; color: #64748b; display: block; margin-top: 2px;">
+                Optional. A code can exist with nothing under it — items are attached
+                later by the import, on the storage screen, or on a purchase order line.
+            </span>
         </div>
 
         <div class="form-group">
@@ -117,7 +121,10 @@ function filterItemDropdown() {
 
     if (searchVal) {
         badge.innerText = `Found ${visibleCount} matching item(s)`;
-        if (firstMatchIndex !== -1 && visibleCount > 0) {
+        // Only when the search leaves exactly one candidate. Picking the first
+        // of many would attach an item nobody chose, and the field is optional
+        // now, so a stray selection is not obvious.
+        if (visibleCount === 1 && firstMatchIndex !== -1) {
             select.selectedIndex = firstMatchIndex;
         }
     } else {

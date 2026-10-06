@@ -6,6 +6,7 @@ import openpyxl
 import re
 import os
 import uuid
+import secrets
 import tempfile
 import io
 import csv
@@ -15,7 +16,52 @@ from fractions import Fraction
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = 'tribi_secret_key'
+def _load_secret_key():
+    """The key that signs session cookies.
+
+    It was the literal string 'tribi_secret_key', sitting in the source. That
+    is enough to forge a cookie: anyone who has seen this file can mint a
+    session that says they are the admin, without a password, and the login
+    screen never sees them.
+
+    Order of preference:
+      1. TRIBI_SECRET_KEY in the environment, for a real deployment.
+      2. A .secret_key file beside this one, generated on first run.
+      3. A fresh random key held in memory, if neither can be used — logins
+         then stop working across a restart, which is visible and annoying
+         rather than silent and dangerous.
+
+    Changing the key logs everybody out once. That is the only effect.
+    """
+    key = os.environ.get('TRIBI_SECRET_KEY', '').strip()
+    if len(key) >= 32:
+        return key
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, '.secret_key')
+    try:
+        with open(path, 'r') as fh:
+            key = fh.read().strip()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+
+    key = secrets.token_hex(32)
+    try:
+        with open(path, 'w') as fh:
+            fh.write(key)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass          # Windows; the file is still outside the source
+    except OSError:
+        print("WARNING: could not write .secret_key — sessions will not "
+              "survive a restart.")
+    return key
+
+
+app.secret_key = _load_secret_key()
 
 # Application version shown in the navbar. Update this one line on each release.
 APP_VERSION = '1.0.a'
@@ -31,6 +77,22 @@ APP_VERSION = '1.0.a'
 # Rounding here at six while the column holds three just moves the truncation
 # somewhere less visible.
 QTY_DP = 6
+
+# Role restrictions are OFF for this deployment: every signed-in user can do
+# everything, including reviewing, approving, cancelling, short closing and
+# reopening a purchase order. That is a deliberate choice for the first
+# version, not an oversight.
+#
+# The checks themselves are still in place and still read the role — they just
+# consult this flag first. Turning restrictions back on is this one line, with
+# nothing to find again and nothing to re-wire:
+#
+#     ENFORCE_ROLE_CHECKS = True
+#
+# Account creation is NOT covered by this. /settings/user/add stays admin-only,
+# because handing every user the ability to mint an admin account is a
+# different kind of permission from being allowed to approve an order.
+ENFORCE_ROLE_CHECKS = False
 
 # Patterns for recognising 'Do Not Stuff' markings in bom_item.patch
 _DNS_TOKEN_RE = re.compile(r'(^|[^a-z0-9])d[\s.\-_]*n[\s.\-_]*s([^a-z0-9]|$)', re.I)
@@ -986,6 +1048,64 @@ def _trim_number(v):
     return str(int(r)) if r == int(r) else ('%g' % r)
 
 
+_VENDOR_COLS_CACHE = None
+
+
+def vendor_columns(cursor):
+    """The vendor columns this database actually has, read once."""
+    global _VENDOR_COLS_CACHE
+    if _VENDOR_COLS_CACHE is None:
+        cursor.execute("SHOW COLUMNS FROM vendor")
+        _VENDOR_COLS_CACHE = {r['Field'] for r in cursor.fetchall()}
+    return _VENDOR_COLS_CACHE
+
+
+def vendor_select(cursor, alias='v'):
+    """SELECT fragment for the vendor fields the PO screens want.
+
+    The vendor table has been through two shapes: one with four free-text
+    address lines and an email, one with a single line plus city, pincode and
+    country. Naming a column that is not there fails the whole query, which is
+    how the Review, Approve and Generate PO screens all became an Internal
+    Server Error at once — none of them touch vendor address data except
+    through this one SELECT.
+
+    So the list is built from the live schema. Whichever shape the table is
+    in, the query runs.
+    """
+    have = vendor_columns(cursor)
+    # tax_mode decides WHICH tax lines a printed PO carries, so it has to
+    # travel with the vendor to the PDF. Same schema-aware treatment: a
+    # database without the column simply does not get it.
+    wanted = ['gst_no', 'ph_no', 'email_id', 'tax_mode', 'currency_id',
+              'address_line_1', 'address_line_2', 'address_line_3',
+              'address_line_4', 'city', 'pincode', 'country']
+    return ''.join(', %s.%s' % (alias, c) for c in wanted if c in have)
+
+
+def fill_vendor_fields(row):
+    """Give the template every field it expects, present or not.
+
+    A missing column becomes an empty string rather than a KeyError, and where
+    the table keeps city, pincode and country as separate columns they are
+    folded into the second address line — the same information, in the shape
+    the PO layout asks for.
+    """
+    if not row:
+        return row
+    if not row.get('address_line_2'):
+        parts = [str(row.get(k) or '').strip()
+                 for k in ('city', 'pincode', 'country')]
+        parts = [x for x in parts if x]
+        if parts:
+            row['address_line_2'] = ', '.join(parts)
+    for f in ('email_id', 'address_line_1', 'address_line_2',
+              'address_line_3', 'address_line_4', 'gst_no', 'ph_no'):
+        if row.get(f) is None:
+            row[f] = ''
+    return row
+
+
 def known_store_locations(cursor):
     """Every location already in use, most-used first.
 
@@ -1513,6 +1633,184 @@ def purchase_order_list():
                            status_filter=status_filter,
                            po_items_map=po_items_map)
 
+def currency_choices(cursor):
+    """The currencies this database knows, for the picker on a PO."""
+    try:
+        cursor.execute("""SELECT curr_id, curr_code, curr_name
+                            FROM currency
+                           WHERE COALESCE(curr_is_deleted, 0) = 0
+                           ORDER BY curr_id""")
+        rows = cursor.fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        # The table is missing or empty: fall back to what the form used to
+        # offer, so the page still works.
+        rows = [{'curr_id': 0, 'curr_code': c, 'curr_name': c}
+                for c in ('INR', 'USD', 'EUR', 'GBP')]
+    return rows
+
+
+def vendors_for_picker(cursor):
+    """Vendors for a PO, each carrying the currency it invoices in.
+
+    The currency is a property of the vendor, so the order defaults to it
+    rather than to INR. Written to work whether or not vendor.currency_id
+    exists, because adding that column was a separate decision.
+    """
+    if 'currency_id' in vendor_columns(cursor):
+        sql = """SELECT v.vendor_id, v.short_name, v.full_name,
+                        v.currency_id, c.curr_code
+                   FROM vendor v
+                   LEFT JOIN currency c ON c.curr_id = v.currency_id
+                  WHERE v.is_deleted = 0
+                  ORDER BY v.short_name"""
+    else:
+        sql = """SELECT vendor_id, short_name, full_name,
+                        NULL AS currency_id, NULL AS curr_code
+                   FROM vendor
+                  WHERE is_deleted = 0
+                  ORDER BY short_name"""
+    cursor.execute(sql)
+    return cursor.fetchall()
+
+
+def form_item_id(form):
+    """The item chosen on an HSN form, or None when none was.
+
+    An HSN code exists whether or not anything is classified under it yet —
+    the code is a fact about the goods, not about one part — so the item is
+    optional on both the add and the edit screen.
+    """
+    raw = (form.get('item_id') or '').strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def may_approve_po():
+    """Whether this user may review, approve, cancel, short close or reopen.
+
+    One place, so the rule is read the same way everywhere and there is a
+    single thing to change when roles come back.
+    """
+    if not ENFORCE_ROLE_CHECKS:
+        return True
+    return session.get('role') in ('admin', 'approver')
+
+
+def hsn_for_item(cursor, item_id):
+    """The HSN linked to this item, or None.
+
+    One per item — hsn_items carries UNIQUE KEY uq_hsn_items_item — so there
+    is never a choice to make here.
+    """
+    cursor.execute("""SELECT h.hsn_id, h.hsn_code, h.description, h.tax_rate
+                        FROM hsn_items hi
+                        JOIN hsn h ON h.hsn_id = hi.hsn_id
+                       WHERE hi.item_id = %s
+                         AND COALESCE(h.is_deleted, 0) = 0
+                       LIMIT 1""", (item_id,))
+    return cursor.fetchone()
+
+
+def hsn_choices(cursor):
+    """Every live HSN code, for the picker on a PO line."""
+    cursor.execute("""SELECT hsn_id, hsn_code, description, tax_rate
+                        FROM hsn
+                       WHERE COALESCE(is_deleted, 0) = 0
+                       ORDER BY hsn_code""")
+    rows = cursor.fetchall()
+    # tojson would otherwise hand the page a DECIMAL as a quoted string.
+    for r in rows:
+        r['tax_rate'] = float(r['tax_rate']) if r['tax_rate'] is not None else None
+    return rows
+
+
+def resolve_po_line_hsn(cursor, item_ids, chosen_ids):
+    """One hsn_id per line index, plus the item codes still without one.
+
+    An item that already has an HSN keeps it. An item with none takes the
+    code the buyer picked on the line, and that choice is written to
+    hsn_items, so it is asked for once rather than on every order.
+
+    Nothing is guessed. This used to fall back to the lowest hsn_id in the
+    table, which meant an unclassified item printed on a tax document at
+    whatever rate happened to sit at the top of the hsn list.
+    """
+    cursor.execute("SELECT hsn_id FROM hsn WHERE COALESCE(is_deleted, 0) = 0")
+    valid = {int(r['hsn_id']) for r in cursor.fetchall()}
+
+    resolved, missing = {}, []
+    for idx, item_id in enumerate(item_ids):
+        if not item_id:
+            continue
+
+        row = hsn_for_item(cursor, item_id)
+        if row:
+            resolved[idx] = int(row['hsn_id'])
+            continue
+
+        picked = None
+        if idx < len(chosen_ids):
+            try:
+                picked = int(str(chosen_ids[idx]).strip())
+            except (TypeError, ValueError):
+                picked = None
+
+        if picked in valid:
+            cursor.execute("""INSERT INTO hsn_items (item_id, hsn_id) VALUES (%s, %s)
+                              ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)""",
+                           (item_id, picked))
+            resolved[idx] = picked
+        else:
+            cursor.execute("SELECT item_code FROM items WHERE item_id = %s", (item_id,))
+            r = cursor.fetchone()
+            missing.append((r or {}).get('item_code') or ('item %s' % item_id))
+
+    return resolved, missing
+
+
+def set_item_hsn(cursor, item_id, hsn_id):
+    """Classify an item, if it is not classified already.
+
+    Returns the hsn_id now on the item, or None when nothing usable was
+    given and the item still has none. An item that already has an HSN is
+    left alone — reclassifying belongs on the HSN screen, not as a side
+    effect of entering stock.
+    """
+    existing = hsn_for_item(cursor, item_id)
+    if existing:
+        return int(existing['hsn_id'])
+
+    try:
+        wanted = int(str(hsn_id).strip())
+    except (TypeError, ValueError):
+        return None
+
+    cursor.execute("""SELECT hsn_id FROM hsn
+                       WHERE hsn_id = %s AND COALESCE(is_deleted, 0) = 0""", (wanted,))
+    if not cursor.fetchone():
+        return None
+
+    cursor.execute("""INSERT INTO hsn_items (item_id, hsn_id) VALUES (%s, %s)
+                      ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)""",
+                   (item_id, wanted))
+    return wanted
+
+
+def missing_hsn_message(missing):
+    """What to tell the buyer about the lines that cannot be priced."""
+    shown = ', '.join(missing[:8])
+    if len(missing) > 8:
+        shown += ' and %d more' % (len(missing) - 8)
+    return ("No HSN code for %s. A purchase order cannot show tax without one, "
+            "so pick an HSN on the line before saving." % shown)
+
+
 # ─── PURCHASE ORDER ADD ─────────────────────────────────
 @app.route('/purchase-order/add', methods=['GET', 'POST'])
 def purchase_order_add():
@@ -1574,10 +1872,17 @@ def purchase_order_add():
         unit_price_list = request.form.getlist('unit_price[]')
         unit_id_list = request.form.getlist('unit_id[]')
         
-        # Default HSN (excluding 999999)
-        cursor.execute("SELECT hsn_id FROM hsn WHERE hsn_code != '999999' AND is_deleted = 0 ORDER BY hsn_id ASC LIMIT 1")
-        hsn_row = cursor.fetchone()
-        hsn_id = hsn_row['hsn_id'] if hsn_row else 1
+        # One HSN per line. An item already classified keeps its code; one
+        # that is not asks the buyer, and the answer is remembered. A line
+        # with neither stops the save rather than borrowing a rate.
+        hsn_id_list = request.form.getlist('hsn_id[]')
+        line_hsn, missing_hsn = resolve_po_line_hsn(cursor, item_ids, hsn_id_list)
+        if missing_hsn:
+            db.rollback()
+            cursor.close()
+            db.close()
+            flash(missing_hsn_message(missing_hsn), 'error')
+            return redirect(request.url)
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -1586,10 +1891,9 @@ def purchase_order_add():
             price = float(unit_price_list[i] or 0)
             unit_id = int(unit_id_list[i])
             
-            # Migrated from items.hsn_id — now sourced via hsn_items junction table
-            cursor.execute("SELECT hsn_id FROM hsn_items WHERE item_id = %s", (item_id,))
-            item_row = cursor.fetchone()
-            line_hsn_id = item_row['hsn_id'] if (item_row and item_row.get('hsn_id')) else hsn_id
+            line_hsn_id = line_hsn.get(i)
+            if not line_hsn_id:
+                continue          # resolve_po_line_hsn already reported it
 
             cursor.execute("""INSERT INTO po_items 
                              (po_id, item_id, hsn_id, qty_ordered, unit_price, unit_id, status)
@@ -1609,8 +1913,7 @@ def purchase_order_add():
     next_formatted_po = format_po_number(next_po, date.today(), 0)
 
     # Get vendors
-    cursor.execute("SELECT vendor_id, short_name, full_name FROM vendor WHERE is_deleted=0 ORDER BY short_name")
-    vendors = cursor.fetchall()
+    vendors = vendors_for_picker(cursor)
     
     # Get items for dropdown
     cursor.execute("SELECT item_id, item_code, `desc`, unit_id FROM items WHERE is_deleted=0 ORDER BY item_code")
@@ -1621,9 +1924,12 @@ def purchase_order_add():
     units = cursor.fetchall()
 
     vendor_items = get_vendor_items(cursor)
+    hsns = hsn_choices(cursor)
+    currencies = currency_choices(cursor)
 
     cursor.close()
     db.close()
+
     return render_template('purchase_order_add.html', 
                            vendors=vendors, 
                            next_po=next_po, 
@@ -1631,7 +1937,9 @@ def purchase_order_add():
                            today=date.today(),
                            items=items,
                            units=units,
-                           vendor_items=vendor_items)
+                           vendor_items=vendor_items,
+                           hsns=hsns,
+                           currencies=currencies)
 
 # ─── GET VENDOR PRICING FOR AUTOFILL ────────────────────
 @app.route('/purchase-order/get-vendor-pricing')
@@ -1770,11 +2078,19 @@ def get_vendor_pricing():
     elif not item_unit_id:
         conv_note = "This item has no stock unit set, so receipts cannot be checked against the order"
 
+    # The PO line needs an HSN. If the item has none the page asks for one
+    # rather than letting the server pick, so it has to know which it is.
+    hsn = hsn_for_item(cursor, item_id)
+
     cursor.close()
     db.close()
 
     return jsonify(
-        success=(price is not None or unit_id is not None),
+        success=True,
+        hsn_id=(hsn['hsn_id'] if hsn else None),
+        hsn_code=(hsn['hsn_code'] if hsn else None),
+        hsn_rate=(float(hsn['tax_rate']) if hsn and hsn['tax_rate'] is not None else None),
+        has_price_or_unit=(price is not None or unit_id is not None),
         unit_id=unit_id,
         item_unit_id=item_unit_id,
         item_unit=unit_short(units, item_unit_id) if item_unit_id else None,
@@ -1792,12 +2108,12 @@ def purchase_order_detail(po_id):
     db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute("""SELECT po.*, v.short_name as vendor_name, v.full_name as vendor_full_name,
-                             v.gst_no, v.ph_no, v.address_line_1, v.city, v.pincode, v.country
+    cursor.execute("""SELECT po.*, v.short_name as vendor_name,
+                             v.full_name as vendor_full_name""" + vendor_select(cursor) + """
                       FROM purchase_order po
                       JOIN vendor v ON po.vendor_id = v.vendor_id
                       WHERE po.po_id = %s""", (po_id,))
-    po = cursor.fetchone()
+    po = fill_vendor_fields(cursor.fetchone())
     if not po:
         cursor.close()
         db.close()
@@ -1882,12 +2198,11 @@ def purchase_order_po_pdf(po_id):
     db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute("""SELECT po.*, v.short_name, v.full_name, v.gst_no, v.ph_no,
-                             v.address_line_1, v.city, v.pincode, v.country
+    cursor.execute("""SELECT po.*, v.short_name, v.full_name""" + vendor_select(cursor) + """
                       FROM purchase_order po
                       JOIN vendor v ON po.vendor_id = v.vendor_id
                       WHERE po.po_id = %s""", (po_id,))
-    po = cursor.fetchone()
+    po = fill_vendor_fields(cursor.fetchone())
     if not po:
         cursor.close()
         db.close()
@@ -1906,6 +2221,15 @@ def purchase_order_po_pdf(po_id):
                       LEFT JOIN hsn h ON pi.hsn_id = h.hsn_id
                       WHERE pi.po_id = %s""", (po_id,))
     po_items = cursor.fetchall()
+
+    # Read BEFORE the connection closes. This sat below cursor.close(), so
+    # get_setting() was handed a dead cursor, swallowed the error in its own
+    # except, and quietly returned the default — meaning the policy line on
+    # every printed PO was the hardcoded fallback, and changing the setting
+    # in the application had no effect that anybody could see.
+    policy_line_text = get_setting('policy_line_text',
+                                   'COVERED UNDER NEW INDIA ASSURANCE POLICY NO. '
+                                   '67020021200200000030', cursor=cursor)
 
     cursor.close()
     db.close()
@@ -1930,8 +2254,6 @@ def purchase_order_po_pdf(po_id):
         from datetime import date
         po['approved_by'] = session.get('full_name') or session.get('username') or 'admin'
         po['approved_date'] = date.today()
-
-    policy_line_text = get_setting('policy_line_text', 'COVERED UNDER NEW INDIA ASSURANCE POLICY NO. 67020021200200000030', cursor=cursor)
 
     from po_invoice_pdf import build_po_pdf
     pdf_buffer = build_po_pdf(po, po_items, po, custom_terms=custom_terms, payment_terms=payment_terms, hide_signature=hide_signature, policy_line=policy_line_text)
@@ -2029,10 +2351,17 @@ def purchase_order_edit(po_id):
         unit_price_list = request.form.getlist('unit_price[]')
         unit_id_list = request.form.getlist('unit_id[]')
         
-        # Default HSN (excluding 999999)
-        cursor.execute("SELECT hsn_id FROM hsn WHERE hsn_code != '999999' AND is_deleted = 0 ORDER BY hsn_id ASC LIMIT 1")
-        hsn_row = cursor.fetchone()
-        hsn_id = hsn_row['hsn_id'] if hsn_row else 1
+        # One HSN per line. An item already classified keeps its code; one
+        # that is not asks the buyer, and the answer is remembered. A line
+        # with neither stops the save rather than borrowing a rate.
+        hsn_id_list = request.form.getlist('hsn_id[]')
+        line_hsn, missing_hsn = resolve_po_line_hsn(cursor, item_ids, hsn_id_list)
+        if missing_hsn:
+            db.rollback()
+            cursor.close()
+            db.close()
+            flash(missing_hsn_message(missing_hsn), 'error')
+            return redirect(request.url)
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -2041,10 +2370,9 @@ def purchase_order_edit(po_id):
             price = float(unit_price_list[i] or 0)
             unit_id = int(unit_id_list[i])
             
-            # Migrated from items.hsn_id — now sourced via hsn_items junction table
-            cursor.execute("SELECT hsn_id FROM hsn_items WHERE item_id = %s", (item_id,))
-            item_row = cursor.fetchone()
-            line_hsn_id = item_row['hsn_id'] if (item_row and item_row.get('hsn_id')) else hsn_id
+            line_hsn_id = line_hsn.get(i)
+            if not line_hsn_id:
+                continue          # resolve_po_line_hsn already reported it
 
             cursor.execute("""INSERT INTO po_items 
                              (po_id, item_id, hsn_id, qty_ordered, unit_price, unit_id, status)
@@ -2060,8 +2388,7 @@ def purchase_order_edit(po_id):
         return redirect(url_for('purchase_order_detail', po_id=po_id))
 
     # GET route: query lists
-    cursor.execute("SELECT vendor_id, short_name, full_name FROM vendor WHERE is_deleted=0 ORDER BY short_name")
-    vendors = cursor.fetchall()
+    vendors = vendors_for_picker(cursor)
     
     cursor.execute("SELECT item_id, item_code, `desc`, unit_id FROM items WHERE is_deleted=0 ORDER BY item_code")
     items = cursor.fetchall()
@@ -2088,9 +2415,13 @@ def purchase_order_edit(po_id):
     if is_previously_approved:
         po['po_status'] = 'Draft'
 
+    hsns = hsn_choices(cursor)
+    currencies = currency_choices(cursor)
+
     cursor.close()
     db.close()
-    return render_template('purchase_order_edit.html', po=po, vendors=vendors, items=items, units=units, po_items=po_items, is_amend=is_amend, vendor_items=vendor_items)
+
+    return render_template('purchase_order_edit.html', po=po, vendors=vendors, items=items, units=units, po_items=po_items, is_amend=is_amend, vendor_items=vendor_items, hsns=hsns, currencies=currencies)
 
 
 # ─── PURCHASE ORDER ACTION: LOCK ────────────────────────
@@ -2141,7 +2472,7 @@ def purchase_order_review(po_id):
 # ─── PURCHASE ORDER ACTION: APPROVE ─────────────────────
 @app.route('/purchase-order/<int:po_id>/approve', methods=['POST'])
 def purchase_order_approve(po_id):
-    if session.get('role') not in ['admin', 'approver']:
+    if not may_approve_po():
         flash("You do not have authority to approve this Purchase Order.", "error")
         return redirect(url_for('purchase_order_detail', po_id=po_id))
         
@@ -2158,8 +2489,10 @@ def purchase_order_approve(po_id):
     db.commit()
     cursor.close()
     db.close()
-    flash("Purchase Order approved successfully.", "success")
-    return redirect(url_for('purchase_order_detail', po_id=po_id))
+    flash("Purchase Order approved successfully.", "success")
+
+    return redirect(url_for('purchase_order_detail', po_id=po_id))
+
 
 
 # ─── PURCHASE ORDER ACTION: CANCEL (BEFORE APPROVAL) ────
@@ -2171,7 +2504,7 @@ def purchase_order_cancel(po_id):
     can have been received, so this voids the order rather than ending it
     early. Refused once a PO is approved — that case is a short close.
     """
-    if session.get('role') not in ['admin', 'approver']:
+    if not may_approve_po():
         flash("You do not have authority to cancel a Purchase Order.", "error")
         return redirect(url_for('purchase_order_detail', po_id=po_id))
 
@@ -2237,7 +2570,7 @@ def purchase_order_short_close(po_id):
     difference is recorded as the reason, not as a separate state. Valid with
     nothing received at all.
     """
-    if session.get('role') not in ['admin', 'approver']:
+    if not may_approve_po():
         flash("You do not have authority to short close a Purchase Order.", "error")
         return redirect(url_for('purchase_order_detail', po_id=po_id))
 
@@ -2297,7 +2630,7 @@ def purchase_order_short_close(po_id):
 def purchase_order_reopen(po_id):
     """Puts a short-closed PO back to Approved so it can be received against
     again — the vendor can supply after all, or the requirement returned."""
-    if session.get('role') not in ['admin', 'approver']:
+    if not may_approve_po():
         flash("You do not have authority to reopen a Purchase Order.", "error")
         return redirect(url_for('purchase_order_detail', po_id=po_id))
 
@@ -3440,6 +3773,7 @@ def grn_add_purchase():
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
 
         # Cannot receive more than the PO still has outstanding. The form also
         # caps each box, but that is a browser-side check a user can bypass, so
@@ -3540,7 +3874,6 @@ def grn_add_purchase():
         
         grn_id = cursor.lastrowid
         
-        line_locations = request.form.getlist('location[]')
         for i, item_id in enumerate(item_ids):
             if not item_id:
                 continue
@@ -3603,6 +3936,7 @@ def grn_add_internal_return():
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -3613,7 +3947,13 @@ def grn_add_internal_return():
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, rem))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            # Where this line is being put away. Optional on every form:
+            # a receipt with no location is still a receipt, and refusing
+            # it would only push the stock somewhere untracked.
+            set_grn_item_location(cursor, new_line_id,
+                                  line_locations[i] if i < len(line_locations) else '')
 
         db.commit()
         cursor.close()
@@ -3626,10 +3966,11 @@ def grn_add_internal_return():
     
     cursor.execute("SELECT item_id, item_code, `desc` AS item_desc, mpn FROM items WHERE is_deleted = 0 ORDER BY item_code")
     items = cursor.fetchall()
+    locations = known_store_locations(cursor)
 
     cursor.close()
     db.close()
-    return render_template('grn_add_internal_return.html', grn_no=grn_no, returned_by=returned_by, items=items, today=date.today())
+    return render_template('grn_add_internal_return.html', grn_no=grn_no, returned_by=returned_by, items=items, today=date.today(), locations=locations)
 
 
 # ─── GRN ADD WORK ORDER RETURN (Step 2 for WO Return) ──────────
@@ -3666,6 +4007,7 @@ def grn_add_wo_return():
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -3676,7 +4018,13 @@ def grn_add_wo_return():
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, rem))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            # Where this line is being put away. Optional on every form:
+            # a receipt with no location is still a receipt, and refusing
+            # it would only push the stock somewhere untracked.
+            set_grn_item_location(cursor, new_line_id,
+                                  line_locations[i] if i < len(line_locations) else '')
 
         db.commit()
         cursor.close()
@@ -3690,10 +4038,11 @@ def grn_add_wo_return():
         SELECT wo_id, wo_number, description FROM work_order ORDER BY wo_id DESC
     """)
     work_orders = cursor.fetchall()
+    locations = known_store_locations(cursor)
 
     cursor.close()
     db.close()
-    return render_template('grn_add_wo_return.html', grn_no=grn_no, work_orders=work_orders, today=date.today())
+    return render_template('grn_add_wo_return.html', grn_no=grn_no, work_orders=work_orders, today=date.today(), locations=locations)
 
 
 # ─── GRN ADD TYPE 5: WORK ORDER RETURN ─────────────────────────
@@ -3749,7 +4098,10 @@ def grn_add_work_order_return():
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, line_remarks))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            set_grn_item_location(cursor, new_line_id,
+                                  request.form.get('location', ''))
 
         db.commit()
         cursor.close()
@@ -3766,10 +4118,11 @@ def grn_add_work_order_return():
         ORDER BY wo.wo_id DESC
     """)
     work_orders = cursor.fetchall()
+    locations = known_store_locations(cursor)
 
     cursor.close()
     db.close()
-    return render_template('grn_add_work_order_return.html', grn_no=grn_no, work_orders=work_orders, today=date.today())
+    return render_template('grn_add_work_order_return.html', grn_no=grn_no, work_orders=work_orders, today=date.today(), locations=locations)
 
 
 # ─── API WO ITEMS LOOKUP ─────────────────────────────────────────
@@ -3844,6 +4197,7 @@ def grn_add_online_purchase():
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -3854,7 +4208,13 @@ def grn_add_online_purchase():
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, rem))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            # Where this line is being put away. Optional on every form:
+            # a receipt with no location is still a receipt, and refusing
+            # it would only push the stock somewhere untracked.
+            set_grn_item_location(cursor, new_line_id,
+                                  line_locations[i] if i < len(line_locations) else '')
 
         db.commit()
         cursor.close()
@@ -3879,10 +4239,11 @@ def grn_add_online_purchase():
     purchase_orders = cursor.fetchall()
     for po in purchase_orders:
         po['formatted_po_number'] = format_po_number(po['po_number'], po['date_raised'], po['po_version_number'], cursor=cursor)
+    locations = known_store_locations(cursor)
 
     cursor.close()
     db.close()
-    return render_template('grn_add_online_purchase.html', grn_no=grn_no, vendors=vendors, items=items, purchase_orders=purchase_orders, today=date.today())
+    return render_template('grn_add_online_purchase.html', grn_no=grn_no, vendors=vendors, items=items, purchase_orders=purchase_orders, today=date.today(), locations=locations)
 
 
 # ─── UPDATE GRN PO NUMBER ──────────────────────────────────────
@@ -3935,6 +4296,7 @@ def grn_add_any_type():
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -3945,7 +4307,13 @@ def grn_add_any_type():
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, rem))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            # Where this line is being put away. Optional on every form:
+            # a receipt with no location is still a receipt, and refusing
+            # it would only push the stock somewhere untracked.
+            set_grn_item_location(cursor, new_line_id,
+                                  line_locations[i] if i < len(line_locations) else '')
 
         db.commit()
         cursor.close()
@@ -3960,10 +4328,11 @@ def grn_add_any_type():
 
     cursor.execute("SELECT item_id, item_code, `desc` AS item_desc, mpn FROM items WHERE is_deleted = 0 ORDER BY item_code")
     items = cursor.fetchall()
+    locations = known_store_locations(cursor)
 
     cursor.close()
     db.close()
-    return render_template('grn_add_any_type.html', grn_no=grn_no, vendors=vendors, items=items, today=date.today())
+    return render_template('grn_add_any_type.html', grn_no=grn_no, vendors=vendors, items=items, today=date.today(), locations=locations)
 
 
 # ─── CONVERT / MODIFY GRN TYPE ─────────────────────────────────
@@ -4010,6 +4379,7 @@ def grn_convert(grn_id):
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
 
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -4020,7 +4390,13 @@ def grn_convert(grn_id):
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, rem))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            # Where this line is being put away. Optional on every form:
+            # a receipt with no location is still a receipt, and refusing
+            # it would only push the stock somewhere untracked.
+            set_grn_item_location(cursor, new_line_id,
+                                  line_locations[i] if i < len(line_locations) else '')
 
         db.commit()
         cursor.close()
@@ -4058,26 +4434,29 @@ def grn_convert(grn_id):
     elif target_type == 1: # Back To Store
         cursor.execute("SELECT wo_id, wo_number, description FROM work_order ORDER BY wo_id DESC")
         work_orders = cursor.fetchall()
+        locations = known_store_locations(cursor)
         cursor.close()
         db.close()
-        return render_template('grn_add_wo_return.html', grn_no=grn['grn_no'], work_orders=work_orders, today=grn['invoice_date'] or date.today(), is_convert=True, grn=grn, existing_items=existing_items, target_type=target_type)
+        return render_template('grn_add_wo_return.html', grn_no=grn['grn_no'], work_orders=work_orders, today=grn['invoice_date'] or date.today(), is_convert=True, grn=grn, existing_items=existing_items, target_type=target_type, locations=locations)
 
     elif target_type == 2: # Internal Return
         cursor.execute("SELECT item_id, item_code, `desc` AS item_desc, mpn FROM items WHERE is_deleted = 0 ORDER BY item_code")
         items = cursor.fetchall()
         returned_by = grn.get('received_by') or session.get('username') or 'admin'
+        locations = known_store_locations(cursor)
         cursor.close()
         db.close()
-        return render_template('grn_add_internal_return.html', grn_no=grn['grn_no'], returned_by=returned_by, items=items, today=grn['invoice_date'] or date.today(), is_convert=True, grn=grn, existing_items=existing_items, target_type=target_type)
+        return render_template('grn_add_internal_return.html', grn_no=grn['grn_no'], returned_by=returned_by, items=items, today=grn['invoice_date'] or date.today(), is_convert=True, grn=grn, existing_items=existing_items, target_type=target_type, locations=locations)
 
     elif target_type == 3: # Online Purchase
         cursor.execute("SELECT vendor_id, short_name, full_name FROM vendor WHERE is_deleted = 0 ORDER BY short_name")
         vendors = cursor.fetchall()
         cursor.execute("SELECT item_id, item_code, `desc` AS item_desc, mpn FROM items WHERE is_deleted = 0 ORDER BY item_code")
         items = cursor.fetchall()
+        locations = known_store_locations(cursor)
         cursor.close()
         db.close()
-        return render_template('grn_add_online_purchase.html', grn_no=grn['grn_no'], vendors=vendors, items=items, today=grn['invoice_date'] or date.today(), is_convert=True, grn=grn, existing_items=existing_items, target_type=target_type)
+        return render_template('grn_add_online_purchase.html', grn_no=grn['grn_no'], vendors=vendors, items=items, today=grn['invoice_date'] or date.today(), is_convert=True, grn=grn, existing_items=existing_items, target_type=target_type, locations=locations)
 
     elif target_type == 5: # Work Order Output
         cursor.execute("""
@@ -4124,6 +4503,7 @@ def grn_add_other():
         item_ids = request.form.getlist('item_id[]')
         qty_received = request.form.getlist('qty_received[]')
         line_remarks = request.form.getlist('line_remarks[]')
+        line_locations = request.form.getlist('location[]')
         
         for i, item_id in enumerate(item_ids):
             if not item_id:
@@ -4134,7 +4514,13 @@ def grn_add_other():
                 INSERT INTO grn_item (grn_id, item_id, qty_received, qty_rejected, qty_accepted, posted_qty_accepted, qc_status, remarks, created_at)
                 VALUES (%s, %s, %s, 0, 0, 0, 'Pending', %s, NOW())
             """, (grn_id, item_id, qty_r, rem))
-            stamp_grn_item_unit(cursor, cursor.lastrowid, item_id)
+            new_line_id = cursor.lastrowid
+            stamp_grn_item_unit(cursor, new_line_id, item_id)
+            # Where this line is being put away. Optional on every form:
+            # a receipt with no location is still a receipt, and refusing
+            # it would only push the stock somewhere untracked.
+            set_grn_item_location(cursor, new_line_id,
+                                  line_locations[i] if i < len(line_locations) else '')
 
         db.commit()
         cursor.close()
@@ -4152,10 +4538,11 @@ def grn_add_other():
     items = cursor.fetchall()
     cursor.execute("SELECT vendor_id, short_name, full_name FROM vendor WHERE is_deleted=0 ORDER BY short_name")
     vendors = cursor.fetchall()
+    locations = known_store_locations(cursor)
     
     cursor.close()
     db.close()
-    return render_template('grn_add_other.html', grn_no=grn_no, grn_type=grn_type_int, grn_type_label=grn_type_label, open_wos=open_wos, items=items, vendors=vendors, today=date.today())
+    return render_template('grn_add_other.html', grn_no=grn_no, grn_type=grn_type_int, grn_type_label=grn_type_label, open_wos=open_wos, items=items, vendors=vendors, today=date.today(), locations=locations)
 
 
 # ─── API PO ITEMS LOOKUP ─────────────────────────────────────────
@@ -4981,6 +5368,12 @@ def parse_inventory_file(filename, file_bytes):
     col_unit = find([lambda h: h in ('unit', 'units', 'uom', 'u/m')])
     col_mpn  = find([lambda h: h == 'mpn' or 'part no' in h or 'part number' in h])
     col_loc  = find([lambda h: 'location' in h or h in ('bin', 'rack', 'store location')])
+    # Two different things can appear under an HSN heading, and they must not
+    # be confused: a CODE ('85331000') is the tax classification itself, an
+    # ID ('110') is the originating system's primary key. Both are numeric,
+    # so the heading decides which is which rather than the value.
+    col_hsn_code = find([lambda h: 'hsn' in h and 'code' in h, lambda h: h == 'hsn'])
+    col_hsn_id   = find([lambda h: 'hsn' in h and ('id' in h or 'ref' in h)])
     # Prefer an explicit closing-stock column, then a physical-stock one, then
     # a generic qty — never a GRN/issued/rate/value column.
     col_qty = (find([lambda h: h == 'stock' or 'closing' in h], exclude=_QTY_EXCLUDE)
@@ -5037,10 +5430,14 @@ def parse_inventory_file(filename, file_bytes):
                         if not is_not_applicable(mpn_raw) else None),
             'location': usable(cell(raw_row, col_loc)),
             'qty': round(max(0.0, qty), QTY_DP),
+            # Resolved against the hsn table at import time, not here.
+            'hsn_code': usable(cell(raw_row, col_hsn_code)),
+            'hsn_source_id': usable(cell(raw_row, col_hsn_id)),
         })
 
     names = {'item code': col_code, 'description': col_desc, 'unit': col_unit,
-             'mpn': col_mpn, 'location': col_loc, 'quantity': col_qty}
+             'mpn': col_mpn, 'location': col_loc, 'quantity': col_qty,
+             'hsn code': col_hsn_code, 'hsn id': col_hsn_id}
     meta = {
         'sheet': sheet_name,
         'header_row': header_idx + 1,
@@ -5119,6 +5516,52 @@ def _resolve_manufacturer(cursor, name, cache, created):
     )
     created.append(name.strip())
     return cache[key]
+
+
+def hsn_lookup(cursor):
+    """Both ways a spreadsheet can name an HSN row, resolved to its hsn_id.
+
+      by_code   '85331000' -> 14    the tax classification itself
+      by_source  110       -> 14    the id it carried in the system it came from
+
+    The second only works for rows imported with a source id, which is why the
+    HSN import keeps it. Built once per import rather than queried per row.
+    """
+    have = {c['COLUMN_NAME'] for c in get_table_columns(cursor, 'hsn')}
+    fields = 'hsn_id, hsn_code' + (', source_id' if 'source_id' in have else '')
+    cursor.execute("SELECT %s FROM hsn WHERE COALESCE(is_deleted, 0) = 0 ORDER BY hsn_id"
+                   % fields)
+    by_code, by_source = {}, {}
+    for row in cursor.fetchall():
+        code = str(row['hsn_code'] or '').strip()
+        if code and code not in by_code:
+            by_code[code] = int(row['hsn_id'])
+        src = row.get('source_id')
+        if src is not None and int(src) not in by_source:
+            by_source[int(src)] = int(row['hsn_id'])
+    return by_code, by_source
+
+
+def resolve_row_hsn(row, by_code, by_source):
+    """(hsn_id, what the file said). Both None when the file said nothing.
+
+    A code is preferred over an id when the file carries both, because the code
+    means the same thing in every system and the id does not.
+    """
+    code = str(row.get('hsn_code') or '').strip()
+    if code:
+        return by_code.get(code), code
+
+    ref = str(row.get('hsn_source_id') or '').strip()
+    if not ref:
+        return None, None
+    try:
+        n = int(float(ref))
+    except (TypeError, ValueError):
+        return None, ref
+    if n == 0:
+        return None, None      # 'no HSN', written as a zero rather than left blank
+    return by_source.get(n), ref
 
 
 def preview_inventory_import(cursor, rows):
@@ -5223,9 +5666,29 @@ def preview_inventory_import(cursor, rows):
             if short.lower() not in known_units:
                 new_units.add(short)
 
+    # What the HSN column in this file would do. Shown before the import so a
+    # file whose ids mean nothing in this database is caught here rather
+    # than discovered later as items with no tax rate.
+    hsn_by_code, hsn_by_source = hsn_lookup(cursor)
+    hsn_ok, hsn_bad, hsn_named = 0, {}, 0
+    for r in rows:
+        hid, stated = resolve_row_hsn(r, hsn_by_code, hsn_by_source)
+        if not stated:
+            continue
+        hsn_named += 1
+        if hid:
+            hsn_ok += 1
+        else:
+            hsn_bad[stated] = hsn_bad.get(stated, 0) + 1
+
     return {
         'total_rows': len(rows),
         'distinct_items': len(seen_codes),
+        'hsn_rows_named': hsn_named,
+        'hsn_rows_resolved': hsn_ok,
+        'hsn_unresolved': dict(sorted(hsn_bad.items(),
+                                      key=lambda kv: -kv[1])[:40]),
+        'hsn_unresolved_total': sum(hsn_bad.values()),
         'existing_items': len(existing_items),
         'new_items': len(seen_codes) - len(existing_items),
         'items_with_stock': items_with_stock,
@@ -5258,6 +5721,8 @@ def apply_inventory_import(cursor, rows, default_location='Main Store',
     """
     rejected = {str(n).strip().lower() for n in (not_manufacturers or ()) if str(n).strip()}
     mfr_cache, unit_cache = {}, {}
+    hsn_by_code, hsn_by_source = hsn_lookup(cursor)
+    hsn_linked, hsn_rechanged, hsn_unresolved = 0, [], {}
     created_mfrs, created_units, created_items = [], [], []
     desc_changed, mfr_changed = [], []
     items_updated = 0
@@ -5334,6 +5799,29 @@ def apply_inventory_import(cursor, rows, default_location='Main Store',
             item_id = _insert_with_defaults(cursor, 'items', values)
             created_items.append(r['item_code'])
 
+        # The HSN lives on the item, in hsn_items, one per item. The file
+        # names it either by code or by the id it had in the system it came
+        # from; both end at the same hsn_id. A blank cell changes nothing,
+        # and a value that cannot be resolved is counted and reported rather
+        # than written as something else.
+        hsn_id, stated = resolve_row_hsn(r, hsn_by_code, hsn_by_source)
+        if stated and hsn_id:
+            cursor.execute("""SELECT hsn_id FROM hsn_items WHERE item_id = %s""",
+                           (item_id,))
+            was = cursor.fetchone()
+            if not was:
+                cursor.execute("""INSERT INTO hsn_items (item_id, hsn_id)
+                                  VALUES (%s, %s)
+                                  ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)""",
+                               (item_id, hsn_id))
+                hsn_linked += 1
+            elif int(was['hsn_id']) != hsn_id:
+                cursor.execute("UPDATE hsn_items SET hsn_id = %s WHERE item_id = %s",
+                               (hsn_id, item_id))
+                hsn_rechanged.append({'item_code': r['item_code'], 'now': stated})
+        elif stated:
+            hsn_unresolved[stated] = hsn_unresolved.get(stated, 0) + 1
+
         # storage holds one row per item (uq_storage_item), so add to it
         location = r['location'] or default_location
         cursor.execute("SELECT store_id, physical_availability FROM storage WHERE item_id = %s LIMIT 1",
@@ -5361,6 +5849,9 @@ def apply_inventory_import(cursor, rows, default_location='Main Store',
         'manufacturers_rejected': sorted(rejected),
         'desc_changed': desc_changed,
         'mfr_changed': mfr_changed,
+        'hsn_linked': hsn_linked,
+        'hsn_changed': hsn_rechanged,
+        'hsn_unresolved': dict(sorted(hsn_unresolved.items())),
     }
 
 
@@ -5376,15 +5867,39 @@ _VENDOR_COLUMNS = [
                                        'vendor', 'vendor name', 'name', 'code')),
     ('full_name',      lambda h: 'full' in h and 'name' in h or h in ('legal name', 'company')),
     ('gst_no',         lambda h: 'gst' in h),
-    ('address_line_1', lambda h: h.startswith('address') or h in ('addr', 'address1')),
+    # Four free-text lines rather than named parts. city, pincode and
+    # country were dropped from the table, so a file still carrying those
+    # headings will have them listed as unrecognised rather than silently
+    # thrown away — which is the honest outcome, and visible on the preview.
+    ('address_line_1', lambda h: h in ('address_line_1', 'address line 1', 'address1',
+                                       'address', 'addr')),
     ('address_line_2', lambda h: h in ('address_line_2', 'address line 2', 'address2')),
+    ('address_line_3', lambda h: h in ('address_line_3', 'address line 3', 'address3')),
+    ('address_line_4', lambda h: h in ('address_line_4', 'address line 4', 'address4')),
+    # The table has been through two address shapes. Both sets of headings
+    # are recognised; the import writes only the columns that exist, so a
+    # file carrying either is handled without editing it.
     ('pincode',        lambda h: 'pin' in h or h in ('zip', 'postcode', 'postal code')),
     ('city',           lambda h: h in ('city', 'town', 'district')),
     ('state',          lambda h: h == 'state'),
     ('country',        lambda h: h == 'country'),
     ('ph_no',          lambda h: h in ('ph_no', 'ph no', 'phone', 'phone no',
                                        'mobile', 'contact', 'contact no', 'telephone')),
-    ('email',          lambda h: 'email' in h or h == 'mail'),
+    ('email_id',       lambda h: 'email' in h or h in ('mail', 'e-mail', 'email id')),
+    # How this vendor's tax is split. The HSN code says the RATE; this says
+    # whether that rate is charged as CGST+SGST, as IGST, or not at all.
+    #   1  within the state      -> CGST + SGST, half each
+    #   2  another state         -> IGST, the whole rate
+    #   0  outside India         -> neither
+    ('tax_mode',       lambda h: h in ('tax_mode', 'tax mode', 'taxmode', 'gst_mode',
+                                       'gst mode', 'tax type')),
+    # Which currency this vendor invoices in. The spreadsheet carries the
+    # id, not the code, and those ids line up with the currency table:
+    #   1 INR   2 USD   3 EUR   4 AED   5 MYR
+    # The preview resolves each one to its code so a mismatch is seen
+    # before it is imported rather than after.
+    ('currency_id',    lambda h: h in ('currency_id', 'currency id', 'currencyid',
+                                       'currency', 'curr_id', 'curr id', 'curr code')),
 ]
 
 
@@ -5462,6 +5977,20 @@ def parse_vendor_file(filename, file_bytes):
         for k, v in list(rec.items()):
             if is_not_applicable(v):
                 rec[k] = None
+        # tax_mode is a code, not text. 0 is meaningful here — it is the
+        # international mode — so it must not be treated as an empty cell.
+        if rec.get('tax_mode') is not None:
+            try:
+                rec['tax_mode'] = int(float(str(rec['tax_mode']).strip()))
+            except (TypeError, ValueError):
+                rec['tax_mode'] = None
+        # Same for the currency id. 0 is not a currency, so it is dropped
+        # rather than written as one.
+        if rec.get('currency_id') is not None:
+            try:
+                rec['currency_id'] = int(float(str(rec['currency_id']).strip())) or None
+            except (TypeError, ValueError):
+                rec['currency_id'] = None
         # The file leaves full_name blank for every row in the sample. The
         # short name is the only name there is, so it stands for both rather
         # than leaving a NOT NULL column empty.
@@ -5533,6 +6062,31 @@ def preview_vendor_import(cursor, rows):
         else:
             creates.append(r['short_name'])
 
+    # An id that is not in the currency table would be refused by the foreign
+    # key, and an id that resolves to the wrong code is worse — it imports
+    # cleanly and prices in the wrong money. Both are shown here.
+    currency_use, bad_currency = [], []
+    # Only worth summarising when there is a column to write it to.
+    # Otherwise the no-column warning below is the honest message, and a
+    # tidy breakdown of currencies would imply they are being stored.
+    if 'currency_id' in cols and any(r.get('currency_id') for r in rows):
+        cursor.execute("""SELECT curr_id, curr_code, curr_name FROM currency
+                           WHERE COALESCE(curr_is_deleted, 0) = 0""")
+        known = {int(c['curr_id']): c for c in cursor.fetchall()}
+        counts = {}
+        for r in rows:
+            cid = r.get('currency_id')
+            if not cid:
+                continue
+            counts[int(cid)] = counts.get(int(cid), 0) + 1
+        for cid, n in sorted(counts.items()):
+            c = known.get(cid)
+            if c:
+                currency_use.append({'currency_id': cid, 'code': c['curr_code'],
+                                     'name': c['curr_name'], 'vendors': n})
+            else:
+                bad_currency.append({'currency_id': cid, 'vendors': n})
+
     # Columns the file has that the table does not. Reported, not dropped in
     # silence: somebody typed them for a reason.
     file_fields = {f for f, _ in _VENDOR_COLUMNS if any(r.get(f) for r in rows)}
@@ -5545,6 +6099,8 @@ def preview_vendor_import(cursor, rows):
         'duplicates_in_file': dupes,
         'gst_clashes': gst_clash,
         'fields_with_no_column': no_column,
+        'currency_use': currency_use,
+        'unknown_currency_ids': bad_currency,
         'table_columns': sorted(cols),
     }
 
@@ -5609,6 +6165,11 @@ def apply_vendor_import(cursor, rows):
 _HSN_COLUMNS = [
     ('hsn_code',      lambda h: 'hsn' in h and ('code' in h or h == 'hsn') or h == 'code'),
     ('description',   lambda h: 'desc' in h or h in ('particulars', 'goods', 'details')),
+    # The id this row had in the system it came from. Worth keeping: the item
+    # file refers to HSN rows by that id, not by the code, so without it the
+    # two files cannot be joined once they are in the database.
+    ('source_id',     lambda h: h in ('id', 'source_id', 'source id', 'hsn_id',
+                                      'hsnid', 'hsn ref', 'ref id', 'trippsy id')),
     ('tax_rate',      lambda h: h in ('tax_rate','tax rate','rate','gst','gst rate',
                                       'gst%','total','total rate','tax')),
     ('cgst',          lambda h: h.startswith('cgst')),
@@ -5633,6 +6194,19 @@ def _as_rate(value):
         return None
     try:
         return round(float(s), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value):
+    """A whole number from a cell, or None. Excel hands back 110.0 for 110."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or is_not_applicable(s):
+        return None
+    try:
+        return int(float(s))
     except (TypeError, ValueError):
         return None
 
@@ -5757,6 +6331,7 @@ def parse_hsn_file(filename, file_bytes):
             'tax_date_from': _as_date(raw(line, 'tax_date_from')),
             'tax_date_to':   _as_date(raw(line, 'tax_date_to')),
             'item_code':     text(line, 'item_code'),
+            'source_id':     _as_int(raw(line, 'source_id')),
         })
 
     return rows, {
@@ -5851,6 +6426,10 @@ def apply_hsn_import(cursor, rows, default_date_from=None):
     """Write the rows. Matched on hsn_code; blanks never blank a value."""
     default_date_from = default_date_from or date.today()
     created, updated, linked = [], [], 0
+    # Only written if the table has somewhere to put it, so the import still
+    # runs on a schema without the column.
+    keep_source = 'source_id' in {c['COLUMN_NAME']
+                                 for c in get_table_columns(cursor, 'hsn')}
 
     for r in rows:
         code = (r['hsn_code'] or '').strip()
@@ -5864,8 +6443,11 @@ def apply_hsn_import(cursor, rows, default_date_from=None):
         if existing:
             hsn_id = existing['hsn_id']
             sets, params = [], []
-            for field in ('description', 'tax_rate', 'cgst', 'sgst', 'igst',
-                          'tax_date_from', 'tax_date_to'):
+            fields = ['description', 'tax_rate', 'cgst', 'sgst', 'igst',
+                      'tax_date_from', 'tax_date_to']
+            if keep_source:
+                fields.append('source_id')
+            for field in fields:
                 value = r.get(field)
                 if value is None:
                     continue                      # a blank cell changes nothing
@@ -5879,14 +6461,18 @@ def apply_hsn_import(cursor, rows, default_date_from=None):
                 updated.append(code)
         else:
             # tax_date_from is NOT NULL and the file often omits it.
-            cursor.execute("""INSERT INTO hsn (hsn_code, description, tax_rate, cgst,
-                                               sgst, igst, tax_date_from, tax_date_to,
-                                               is_deleted)
-                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)""",
-                           (code, r.get('description'), r.get('tax_rate'),
-                            r.get('cgst'), r.get('sgst'), r.get('igst'),
-                            r.get('tax_date_from') or default_date_from,
-                            r.get('tax_date_to')))
+            names = ['hsn_code', 'description', 'tax_rate', 'cgst', 'sgst',
+                     'igst', 'tax_date_from', 'tax_date_to', 'is_deleted']
+            vals = [code, r.get('description'), r.get('tax_rate'),
+                    r.get('cgst'), r.get('sgst'), r.get('igst'),
+                    r.get('tax_date_from') or default_date_from,
+                    r.get('tax_date_to'), 0]
+            if keep_source:
+                names.append('source_id')
+                vals.append(r.get('source_id'))
+            cursor.execute("INSERT INTO hsn (%s) VALUES (%s)"
+                           % (', '.join('`%s`' % n for n in names),
+                              ', '.join(['%s'] * len(names))), tuple(vals))
             hsn_id = cursor.lastrowid
             created.append(code)
 
@@ -6355,7 +6941,19 @@ def storage_add():
         item_id = request.form['item_id']
         store_location = request.form['store_location']
         physical_availability = float(request.form.get('physical_availability', 0) or 0)
-        
+
+        # The HSN lives on the item, in hsn_items — storage has no column for
+        # it and one row per item, so classifying here classifies the item
+        # everywhere. An item that is already classified keeps its code;
+        # reclassifying is a decision for the HSN screen, not a side
+        # effect of entering stock.
+        #
+        # Offered, not demanded. Receiving stock is not a tax document, so
+        # a missing HSN must not stop someone recording what is on the
+        # shelf. The purchase order is where it is insisted on, because
+        # that is where the rate is actually printed.
+        resolved_hsn = set_item_hsn(cursor, item_id, request.form.get('hsn_id'))
+
         cursor.execute("SELECT store_id, store_location, physical_availability FROM storage WHERE item_id = %s LIMIT 1", (item_id,))
         existing = cursor.fetchone()
         if existing:
@@ -6367,7 +6965,11 @@ def storage_add():
                               VALUES (%s, %s, %s, NOW())""",
                            (item_id, store_location, physical_availability))
             flash('Storage entry added successfully.', 'success')
-            
+
+        if not resolved_hsn:
+            flash('This item has no HSN code yet. A purchase order will ask '
+                  'for one before it can show tax.', 'warning')
+
         db.commit()
         cursor.close()
         db.close()
@@ -6375,9 +6977,10 @@ def storage_add():
 
     cursor.execute("SELECT item_id, item_code, `desc` as item_desc FROM items WHERE is_deleted=0 ORDER BY item_code")
     items = cursor.fetchall()
+    hsns = hsn_choices(cursor)
     cursor.close()
     db.close()
-    return render_template('storage_add.html', items=items)
+    return render_template('storage_add.html', items=items, hsns=hsns)
 
 
 # ─── API ITEM STORAGE LOCATION ─────────────────────────
@@ -6387,15 +6990,19 @@ def api_item_storage_location(item_id):
     cursor = db.cursor(dictionary=True)
     cursor.execute("SELECT store_location, physical_availability FROM storage WHERE item_id = %s LIMIT 1", (item_id,))
     row = cursor.fetchone()
+    # Whether this item is classified decides if the form shows its HSN or
+    # asks for one, so the same call that fills the location answers that too.
+    hsn = hsn_for_item(cursor, item_id)
     cursor.close()
     db.close()
-    if row:
-        return jsonify({
-            'exists': True,
-            'location': row['store_location'],
-            'physical_availability': float(row['physical_availability'] or 0)
-        })
-    return jsonify({'exists': False})
+    return jsonify({
+        'exists': bool(row),
+        'location': (row['store_location'] if row else None),
+        'physical_availability': (float(row['physical_availability'] or 0) if row else None),
+        'hsn_id': (hsn['hsn_id'] if hsn else None),
+        'hsn_code': (hsn['hsn_code'] if hsn else None),
+        'hsn_rate': (float(hsn['tax_rate']) if hsn and hsn['tax_rate'] is not None else None)
+    })
 
 # ─── STORAGE EDIT ───────────────────────────────────────
 @app.route('/storage/<int:store_id>/edit', methods=['GET', 'POST'])
@@ -6477,7 +7084,7 @@ def hsn_add():
     cursor = db.cursor(dictionary=True)
 
     if request.method == 'POST':
-        item_id = int(request.form['item_id'])
+        item_id = form_item_id(request.form)
         hsn_code = request.form['hsn_code'].strip()
         description = request.form.get('description', '').strip()
         tax_rate = float(request.form.get('tax_rate', 0))
@@ -6500,15 +7107,20 @@ def hsn_add():
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 0)
             """, (hsn_code, description, tax_rate, cgst, sgst, igst, tax_date_from))
             hsn_id = cursor.lastrowid
-            
-            # Migrated from items.hsn_id — now sourced via hsn_items junction table
-            cursor.execute("""
-                INSERT INTO hsn_items (item_id, hsn_id)
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)
-            """, (item_id, hsn_id))
+
+            # Linked only if an item was chosen. A code with nothing under
+            # it is perfectly ordinary — items are attached later, by the
+            # import, by the storage screen, or on a purchase order line.
+            if item_id:
+                cursor.execute("""
+                    INSERT INTO hsn_items (item_id, hsn_id)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)
+                """, (item_id, hsn_id))
             db.commit()
-            flash(f"HSN Code {hsn_code} created successfully for the selected item.", "success")
+            flash(f"HSN Code {hsn_code} created" +
+                  (" and linked to the selected item." if item_id
+                   else ". No item is classified under it yet."), "success")
         except mysql.connector.Error as err:
             flash(f"Database error: {err}", "error")
         finally:
@@ -6550,7 +7162,7 @@ def hsn_edit(hsn_id):
         return redirect(url_for('hsn_list'))
 
     if request.method == 'POST':
-        item_id = int(request.form['item_id'])
+        item_id = form_item_id(request.form)
         hsn_code = request.form['hsn_code'].strip()
         description = request.form.get('description', '').strip()
         tax_rate = float(request.form.get('tax_rate', 0))
@@ -6573,7 +7185,10 @@ def hsn_edit(hsn_id):
             old_item_row = cursor.fetchone()
             old_item_id = old_item_row['item_id'] if old_item_row else None
 
-            if old_item_id is not None and old_item_id != item_id:
+            # Leaving the item blank means "do not change the link", not
+            # "remove it". Clearing a classification is a deliberate act and
+            # should not happen because a field was left empty.
+            if item_id and old_item_id is not None and old_item_id != item_id:
                 cursor.execute("DELETE FROM hsn_items WHERE item_id = %s", (old_item_id,))
             
             # Migrated from hsn.item_id — now sourced via hsn_items junction table
@@ -6584,12 +7199,13 @@ def hsn_edit(hsn_id):
             """, (hsn_code, description, tax_rate, cgst, sgst, igst, tax_date_from, hsn_id))
             
             # Migrated from items.hsn_id — now sourced via hsn_items junction table
-            cursor.execute("""
-                INSERT INTO hsn_items (item_id, hsn_id)
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)
-            """, (item_id, hsn_id))
-            
+            if item_id:
+                cursor.execute("""
+                    INSERT INTO hsn_items (item_id, hsn_id)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)
+                """, (item_id, hsn_id))
+
             db.commit()
             flash(f"HSN Code {hsn_code} updated successfully.", "success")
         except mysql.connector.Error as err:
@@ -6861,82 +7477,21 @@ def seed_admin_user():
         print("Seeding/Creation error:", e)
 
 
-def seed_hsn():
+def ensure_schema_columns():
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
         
-        # Soft delete dummy legacy 999999 HSN
-        cursor.execute("UPDATE hsn SET is_deleted = 1 WHERE hsn_code = '999999'")
-        conn.commit()
+        # HSN codes and the item -> HSN links used to be generated here:
+        # eight hardcoded codes were inserted on every start, and every
+        # item without a link was given one by keyword-matching its
+        # description, with 854370 as the catch-all. That produced 4,322
+        # links of which 1,472 were the fallback, and misfiled anything
+        # whose description happened to contain 'res', 'cap', 'plate' or
+        # 'filter'. HSN now comes from the import file only, so the
+        # guessing is gone. An item with no HSN shows no tax rate, which
+        # is the honest answer and is visible, where a wrong rate is not.
 
-        # Standard HSN Master Definitions
-        standard_hsns = [
-            {'hsn_code': '853400', 'description': 'Printed Circuit Boards & Assemblies (PCBA)', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '854110', 'description': 'Diodes, Transistors & Semiconductor Devices', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '853321', 'description': 'Electrical Resistors, Capacitors & Passive Components', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '731815', 'description': 'Screws, Bolts, Nuts, Studs & Fasteners', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '854442', 'description': 'Insulated Wires, Cables, Harnesses & Connectors', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '761699', 'description': 'Aluminum Heatsinks & Mechanical Fittings', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '350691', 'description': 'Prepared Adhesives, Compounds & Coatings', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-            {'hsn_code': '854370', 'description': 'Electrical Apparatus & Electronic Assemblies', 'tax_rate': 18.00, 'cgst': 9.00, 'sgst': 9.00, 'igst': 18.00},
-        ]
-        
-        hsn_map = {}
-        for h in standard_hsns:
-            cursor.execute("SELECT hsn_id FROM hsn WHERE hsn_code = %s AND is_deleted = 0 LIMIT 1", (h['hsn_code'],))
-            row = cursor.fetchone()
-            if row:
-                hsn_map[h['hsn_code']] = row['hsn_id']
-            else:
-                cursor.execute("""
-                    INSERT INTO hsn (hsn_code, description, tax_rate, cgst, sgst, igst, tax_date_from, is_deleted)
-                    VALUES (%s, %s, %s, %s, %s, %s, '2020-01-01', 0)
-                """, (h['hsn_code'], h['description'], h['tax_rate'], h['cgst'], h['sgst'], h['igst']))
-                hsn_map[h['hsn_code']] = cursor.lastrowid
-        conn.commit()
-
-        # Migrated from items.hsn_id — now sourced via hsn_items junction table
-        cursor.execute("""
-            SELECT i.item_id, i.`desc` 
-            FROM items i 
-            LEFT JOIN hsn_items hi ON i.item_id = hi.item_id 
-            LEFT JOIN hsn h ON hi.hsn_id = h.hsn_id 
-            WHERE hi.hsn_id IS NULL OR h.hsn_code = '999999' OR h.is_deleted = 1
-        """)
-        unmapped_items = cursor.fetchall()
-        
-        def _categorize(desc):
-            d = (desc or '').lower()
-            if any(k in d for k in ['pcb', 'pcba', 'circuit board', 'mcd2000']):
-                return '853400'
-            elif any(k in d for k in ['diode', 'igbt', 'transistor', 'mosfet', 'rectifier', 'power module', 'semiconductor']):
-                return '854110'
-            elif any(k in d for k in ['res', 'capacitor', 'cap', 'inductor', 'transformer', 'thermistor', 'filter']):
-                return '853321'
-            elif any(k in d for k in ['screw', 'washer', 'stud', 'nut', 'spring', 'fastener']):
-                return '731815'
-            elif any(k in d for k in ['harness', 'cable', 'wire', 'connector', 'terminal', 'clamp', 'insulator', 'grommet']):
-                return '854442'
-            elif any(k in d for k in ['htsnk', 'heatsink', 'plate', 'enclosure', 'bracket', 'fitting']):
-                return '761699'
-            elif any(k in d for k in ['compound', 'coating', 'adhesive', 'glue', 'lacquer', 'tape']):
-                return '350691'
-            else:
-                return '854370'
-
-        for item in unmapped_items:
-            code = _categorize(item['desc'])
-            h_id = hsn_map.get(code)
-            if h_id:
-                # Migrated from items.hsn_id — now sourced via hsn_items junction table
-                cursor.execute("""
-                    INSERT INTO hsn_items (item_id, hsn_id)
-                    VALUES (%s, %s)
-                    ON DUPLICATE KEY UPDATE hsn_id = VALUES(hsn_id)
-                """, (item['item_id'], h_id))
-        conn.commit()
-            
         # Add is_locked column if not exists
         cursor.execute("SHOW COLUMNS FROM purchase_order LIKE 'is_locked'")
         if not cursor.fetchone():
@@ -6944,12 +7499,11 @@ def seed_hsn():
             conn.commit()
             print("Added is_locked column to purchase_order table.")
 
-        # Drop unique key constraint on hsn_code if exists
-        cursor.execute("SHOW INDEX FROM hsn WHERE Key_name = 'hsn_code'")
-        if cursor.fetchone():
-            cursor.execute("ALTER TABLE hsn DROP INDEX hsn_code")
-            conn.commit()
-            print("Dropped unique index hsn_code from hsn table.")
+        # The unique index on hsn.hsn_code used to be dropped here on
+        # every start, because the seeding above could insert a code the
+        # table already held. Nothing generates codes any more, so there
+        # is nothing to make room for, and dropping an index the database
+        # is relied on to hold would only undo it again next start.
 
         # Add currency column to purchase_order if not exists
         cursor.execute("SHOW COLUMNS FROM purchase_order LIKE 'currency'")
@@ -6961,7 +7515,7 @@ def seed_hsn():
         cursor.close()
         conn.close()
     except Exception as e:
-        print("HSN seeding error:", e)
+        print("Schema check error:", e)
 
 
 def format_po_number(po_number, date_raised, version, cursor=None):
@@ -7280,7 +7834,37 @@ def settings_user_edit(user_id):
 
 if __name__ == '__main__':
     seed_admin_user()
-    seed_hsn()
-    app.run(host='0.0.0.0', port=5000, debug=True, use_evalex=False)
+    ensure_schema_columns()
+
+    # ─── DEBUG IS OFF UNLESS ASKED FOR ──────────────────────────
+    #
+    # debug=True on host 0.0.0.0 hands a full traceback — file paths, source
+    # lines, local variables — to anybody on the network who can make the
+    # application throw. use_evalex=False already blocked the interactive
+    # console, which was the worst of it, but the disclosure remains.
+    #
+    # Set TRIBI_DEBUG=1 to turn it back on while developing.
+    debug_mode = os.environ.get('TRIBI_DEBUG', '').strip().lower() in ('1', 'true', 'yes')
+
+    if not debug_mode:
+        # With debug off an unhandled error becomes a blank 500 page, so the
+        # traceback has to go somewhere a person can read it. Without this,
+        # diagnosing a fault in the store means asking someone to reproduce it
+        # while you watch.
+        import logging
+        from logging.handlers import RotatingFileHandler
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'tribi_errors.log')
+        handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+        handler.setLevel(logging.ERROR)
+        handler.setFormatter(logging.Formatter(
+            '%(asctime)s  %(levelname)s  %(message)s\n'
+            '  %(pathname)s:%(lineno)d\n'))
+        app.logger.addHandler(handler)
+        app.logger.setLevel(logging.ERROR)
+        print(f"Errors will be written to {log_path}")
+
+    print(f"Starting Tribi ERP — debug {'ON' if debug_mode else 'off'}")
+    app.run(host='0.0.0.0', port=5000, debug=debug_mode, use_evalex=False)
 
 #
