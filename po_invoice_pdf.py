@@ -418,6 +418,7 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
     if tax_mode not in (0, 1, 2):
         tax_mode = 1
 
+    unclassified = 0
     subtotal = 0.0
     total_cgst = 0.0
     total_sgst = 0.0
@@ -437,10 +438,19 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
         # `or 18.0` was wrong here: a genuine 0% HSN is falsy, so ten of the
         # codes in the table were printing at 18%. None means "no rate known",
         # zero means zero.
+        # A line with no HSN has no known rate. Defaulting to 18 would be
+        # inventing a tax figure on a tax document — the same mistake as the
+        # old `or 18.0`, just one step further back. It is charged nothing and
+        # marked, so whoever sends the order can see it.
         raw_rate = item.get('tax_rate')
-        tax_rate = 18.0 if raw_rate is None else float(raw_rate)
+        has_hsn = bool(item.get('hsn_code'))
+        tax_rate = float(raw_rate) if raw_rate is not None else 0.0
 
-        if tax_mode == 0:
+        if not has_hsn:
+            cgst_rate = sgst_rate = igst_rate = 0.0
+            tax_rate = 0.0
+            unclassified += 1
+        elif tax_mode == 0:
             cgst_rate = sgst_rate = igst_rate = 0.0
             tax_rate = 0.0
         elif tax_mode == 2:
@@ -472,7 +482,9 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
         item_code_text = (f"{item.get('item_code', '')}<br/>[HSN {hsn_code}]"
                           if hsn_code else f"{item.get('item_code', '')}<br/>[HSN not set]")
 
-        if tax_mode == 0:
+        if not has_hsn:
+            tax_text = "<br/>[no HSN — not taxed]"
+        elif tax_mode == 0:
             tax_text = "0.0000<br/>[not taxed]"
         else:
             tax_text = f"{line_tax:.4f}<br/>[{tax_rate:.2f} %]"
@@ -583,6 +595,14 @@ def build_po_pdf(po, po_items, vendor, custom_terms=None, payment_terms=None, hi
         terms_lines.append(Paragraph(
             "<b>No Indian GST is charged on this order — the supplier is "
             "outside India.</b>", cell_style))
+        terms_lines.append(Spacer(1, 3))
+    if unclassified:
+        terms_lines.append(Paragraph(
+            "<b>%d line%s on this order carr%s no HSN code, so no tax has been "
+            "calculated against %s.</b>" %
+            (unclassified, '' if unclassified == 1 else 's',
+             'ies' if unclassified == 1 else 'y',
+             'it' if unclassified == 1 else 'them'), cell_style))
         terms_lines.append(Spacer(1, 3))
     if custom_terms:
         # Split terms by newline and filter out empty lines

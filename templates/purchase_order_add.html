@@ -541,12 +541,11 @@ function makeHsnSelect() {
     if (!hsnSelectTemplate) {
         hsnSelectTemplate = document.createElement('select');
         hsnSelectTemplate.name = 'hsn_id[]';
-        hsnSelectTemplate.required = true;
         hsnSelectTemplate.setAttribute('style',
             'width: 100%; padding: 6px; border: 1px solid #f59e0b; border-radius: 4px; background: #fffbeb;');
         const ph = document.createElement('option');
         ph.value = '';
-        ph.textContent = '— Select HSN —';
+        ph.textContent = '— not set —';
         hsnSelectTemplate.appendChild(ph);
         hsnData.forEach(h => {
             const opt = document.createElement('option');
@@ -590,7 +589,7 @@ function setRowHsn(row, hsnId, hsnCode, hsnRate) {
     cell.appendChild(select);
     const note = document.createElement('div');
     note.style.cssText = 'font-size: 11px; color: #b45309; margin-top: 3px;';
-    note.textContent = 'not set for this item — saved against it';
+    note.textContent = 'optional — if you pick one it is saved against the item';
     cell.appendChild(note);
     initSearchableSelect(select, "Search HSN...");
 }

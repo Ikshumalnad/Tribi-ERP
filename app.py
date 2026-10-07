@@ -94,6 +94,18 @@ QTY_DP = 6
 # different kind of permission from being allowed to approve an order.
 ENFORCE_ROLE_CHECKS = False
 
+# Whether a purchase order line must carry an HSN code. OFF for this
+# deployment: a line may be saved without one, and the printed PO marks that
+# line rather than inventing a rate for it.
+#
+# This needs po_items.hsn_id to be NULLable — see tribi_po_hsn_optional.sql.
+# Without that ALTER the column cannot hold "no HSN" and the save fails on a
+# NOT NULL constraint, which is why the flag and the migration go together.
+#
+# Turning it back on is this one line:
+#     REQUIRE_HSN_ON_PO = True
+REQUIRE_HSN_ON_PO = False
+
 # Patterns for recognising 'Do Not Stuff' markings in bom_item.patch
 _DNS_TOKEN_RE = re.compile(r'(^|[^a-z0-9])d[\s.\-_]*n[\s.\-_]*s([^a-z0-9]|$)', re.I)
 _DO_NOT_STUFF_RE = re.compile(r'do\s*not\s*(stuff|populate|place|mount|fit)', re.I)
@@ -1802,6 +1814,21 @@ def set_item_hsn(cursor, item_id, hsn_id):
     return wanted
 
 
+def no_hsn_note(missing):
+    """Said after the order is saved, when a line carries no HSN.
+
+    Not an error: the order is real and placed. But the printed copy will show
+    no tax against those lines, and whoever sends it should know that before
+    the vendor does.
+    """
+    shown = ', '.join(missing[:8])
+    if len(missing) > 8:
+        shown += ' and %d more' % (len(missing) - 8)
+    return ("Saved. No HSN code is set for %s, so the printed order shows no "
+            "tax on %s. Set one on the item when you know it." %
+            (shown, 'that line' if len(missing) == 1 else 'those lines'))
+
+
 def missing_hsn_message(missing):
     """What to tell the buyer about the lines that cannot be priced."""
     shown = ', '.join(missing[:8])
@@ -1877,7 +1904,7 @@ def purchase_order_add():
         # with neither stops the save rather than borrowing a rate.
         hsn_id_list = request.form.getlist('hsn_id[]')
         line_hsn, missing_hsn = resolve_po_line_hsn(cursor, item_ids, hsn_id_list)
-        if missing_hsn:
+        if missing_hsn and REQUIRE_HSN_ON_PO:
             db.rollback()
             cursor.close()
             db.close()
@@ -1891,9 +1918,10 @@ def purchase_order_add():
             price = float(unit_price_list[i] or 0)
             unit_id = int(unit_id_list[i])
             
+            # None when the item has no HSN and none was picked. The line is
+            # still ordered — it just carries no tax classification, and the
+            # printed PO says so instead of guessing a rate.
             line_hsn_id = line_hsn.get(i)
-            if not line_hsn_id:
-                continue          # resolve_po_line_hsn already reported it
 
             cursor.execute("""INSERT INTO po_items 
                              (po_id, item_id, hsn_id, qty_ordered, unit_price, unit_id, status)
@@ -1906,6 +1934,8 @@ def purchase_order_add():
         
         formatted_po = format_po_number(int(po_number), date_raised, po_version_number)
         flash(f'Purchase Order {formatted_po} created successfully.', 'success')
+        if missing_hsn:
+            flash(no_hsn_note(missing_hsn), 'warning')
         return redirect(url_for('purchase_order_list'))
 
     # Suggest next sequence number in current financial year
@@ -2356,7 +2386,7 @@ def purchase_order_edit(po_id):
         # with neither stops the save rather than borrowing a rate.
         hsn_id_list = request.form.getlist('hsn_id[]')
         line_hsn, missing_hsn = resolve_po_line_hsn(cursor, item_ids, hsn_id_list)
-        if missing_hsn:
+        if missing_hsn and REQUIRE_HSN_ON_PO:
             db.rollback()
             cursor.close()
             db.close()
@@ -2370,9 +2400,10 @@ def purchase_order_edit(po_id):
             price = float(unit_price_list[i] or 0)
             unit_id = int(unit_id_list[i])
             
+            # None when the item has no HSN and none was picked. The line is
+            # still ordered — it just carries no tax classification, and the
+            # printed PO says so instead of guessing a rate.
             line_hsn_id = line_hsn.get(i)
-            if not line_hsn_id:
-                continue          # resolve_po_line_hsn already reported it
 
             cursor.execute("""INSERT INTO po_items 
                              (po_id, item_id, hsn_id, qty_ordered, unit_price, unit_id, status)
