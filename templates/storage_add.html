@@ -5,26 +5,81 @@
     <a href="/storage" class="btn-outline">← Back</a>
 </div>
 
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
 <div class="form-card">
     <form method="post" action="/storage/add">
+
+        <h3 style="font-size:15px; margin:0 0 4px; color:#1a2e4a;">The item</h3>
+        <p id="mode_line" style="font-size:13px; color:#64748b; margin:0 0 14px;">
+            Type a code. If it is already in the master its details fill in below;
+            if it is not, fill them in and the item is created.
+        </p>
+
         <div class="form-grid">
             <div class="form-group">
                 <label>Item Code <span class="required">*</span></label>
-                <input type="text" id="item_search_input" class="input-field" list="items-list" placeholder="Type item code..." required autocomplete="off">
+                <input type="text" id="item_search_input" class="input-field" list="items-list"
+                       placeholder="Type an item code — existing or new" required autocomplete="off"
+                       value="{{ form.new_item_code or '' }}">
                 <datalist id="items-list">
                     {% for it in items %}
                     <option data-id="{{ it.item_id }}" value="{{ it.item_code }}">{{ it.item_desc or '' }}</option>
                     {% endfor %}
                 </datalist>
-                <input type="hidden" name="item_id" id="item_id" required>
+                <input type="hidden" name="item_id" id="item_id">
+                <input type="hidden" name="new_item_code" id="new_item_code">
+                <div id="code_notice" style="font-size:12px; margin-top:6px; color:#64748b;">
+                    Existing codes are suggested as you type.
+                </div>
             </div>
+
+            <div class="form-group">
+                <label>Description <span class="required" id="req_desc">*</span></label>
+                <input type="text" name="new_item_desc" id="new_item_desc" class="input-field"
+                       maxlength="100" placeholder="e.g. Copper-Wire SWG-26"
+                       value="{{ form.new_item_desc or '' }}">
+                <div class="field-note" id="note_desc" style="font-size:12px; color:#64748b; margin-top:6px;"></div>
+            </div>
+
+            <div class="form-group">
+                <label>Unit <span class="required" id="req_unit">*</span></label>
+                <select name="new_item_unit" id="new_item_unit" class="input-field">
+                    <option value="">— Select unit —</option>
+                    {% for u in units %}
+                    <option value="{{ u.unit_short_name }}" {% if form.new_item_unit == u.unit_short_name %}selected{% endif %}>
+                        {{ u.unit_short_name }} — {{ u.unit_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div class="field-note" id="note_unit" style="font-size:12px; color:#64748b; margin-top:6px;">
+                    Only units that already exist. An item saved without one cannot take
+                    a conversion factor later.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>MPN</label>
+                <input type="text" name="new_item_mpn" id="new_item_mpn" class="input-field"
+                       maxlength="120" placeholder="Keltron - SA1011EMAS"
+                       value="{{ form.new_item_mpn or '' }}">
+                <div class="field-note" id="note_mpn" style="font-size:12px; color:#64748b; margin-top:6px;">
+                    Optional. <code>Make - Part No</code> with spaces around the hyphen is split
+                    into manufacturer and part number; anything else is kept whole.
+                </div>
+            </div>
+
             <div class="form-group">
                 <label>HSN Code</label>
                 <div id="hsn_cell">
                     <select name="hsn_id" id="hsn_select" class="input-field">
                         <option value="">— Select HSN —</option>
                         {% for h in hsns %}
-                        <option value="{{ h.hsn_id }}">{{ h.hsn_code }}{% if h.tax_rate is not none %} — {{ '%.2f'|format(h.tax_rate) }}%{% endif %}{% if h.description %} — {{ h.description }}{% endif %}</option>
+                        <option value="{{ h.hsn_id }}" {% if form.hsn_id == h.hsn_id|string %}selected{% endif %}>{{ h.hsn_code }}{% if h.tax_rate is not none %} — {{ '%.2f'|format(h.tax_rate) }}%{% endif %}{% if h.description %} — {{ h.description }}{% endif %}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -32,14 +87,24 @@
                     Optional here. Set it once and every purchase order for this item picks it up.
                 </div>
             </div>
+        </div>
+
+        <h3 style="font-size:15px; margin:22px 0 14px; color:#1a2e4a;">The stock</h3>
+
+        <div class="form-grid">
             <div class="form-group">
                 <label>Store Location <span class="required">*</span></label>
-                <input type="text" name="store_location" id="store_location_input" class="input-field" placeholder="e.g. Rack A-3" required>
+                <input type="text" name="store_location" id="store_location_input" class="input-field"
+                       placeholder="e.g. Rack A-3" required value="{{ form.store_location or '' }}">
                 <div id="location_notice" style="display: none; font-size: 12px; color: #2563eb; margin-top: 6px; font-weight: 600;"></div>
             </div>
             <div class="form-group">
                 <label>Physical Store Availability <span class="required">*</span></label>
-                <input type="number" name="physical_availability" class="input-field" step="0.001" min="0" value="0" required>
+                <input type="number" name="physical_availability" class="input-field" step="0.001" min="0"
+                       value="{{ form.physical_availability or 0 }}" required>
+                <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                    Added to whatever is already on the shelf, not replacing it.
+                </div>
             </div>
         </div>
 
@@ -54,20 +119,75 @@
 document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('item_search_input');
     const hiddenInput = document.getElementById('item_id');
+    const newCodeInput = document.getElementById('new_item_code');
     const locationInput = document.getElementById('store_location_input');
     const locationNotice = document.getElementById('location_notice');
+    const codeNotice = document.getElementById('code_notice');
+    const modeLine = document.getElementById('mode_line');
     const datalist = document.getElementById('items-list');
     const hsnCell = document.getElementById('hsn_cell');
     const hsnNotice = document.getElementById('hsn_notice');
+    const descIn = document.getElementById('new_item_desc');
+    const unitIn = document.getElementById('new_item_unit');
+    const mpnIn  = document.getElementById('new_item_mpn');
+    const noteDesc = document.getElementById('note_desc');
+    const noteUnit = document.getElementById('note_unit');
+    const noteMpn  = document.getElementById('note_mpn');
+    const reqDesc = document.getElementById('req_desc');
+    const reqUnit = document.getElementById('req_unit');
     const hsnData = {{ hsns | tojson }};
 
+    const LOCKED_BG = '#f1f5f9';
+
+    // Description, unit and MPN are on screen for every item. For a code that
+    // already exists they show what the master holds and are read-only --
+    // changing an item's description belongs on the item master, not on a
+    // stock entry. For a new code they are the fields that create it.
+    function setItemFields(mode, data) {
+        const existing = (mode === 'existing');
+        descIn.readOnly = existing;
+        mpnIn.readOnly  = existing;
+        unitIn.disabled = existing;
+        descIn.required = !existing;
+        unitIn.required = !existing;
+        reqDesc.style.display = existing ? 'none' : '';
+        reqUnit.style.display = existing ? 'none' : '';
+
+        [descIn, mpnIn].forEach(function (el) {
+            el.style.backgroundColor = existing ? LOCKED_BG : '';
+        });
+        unitIn.style.backgroundColor = existing ? LOCKED_BG : '';
+
+        if (existing) {
+            descIn.value = data.item_desc || '';
+            unitIn.value = data.unit_short_name || '';
+            mpnIn.value  = data.mpn || '';
+            noteDesc.textContent = 'From the item master.';
+            noteUnit.textContent = data.unit_short_name
+                ? 'From the item master.'
+                : 'This item has no unit. It cannot take a conversion factor until one is set.';
+            noteUnit.style.color = data.unit_short_name ? '#64748b' : '#8a5b12';
+            noteMpn.textContent  = 'From the item master.';
+        } else {
+            noteDesc.textContent = '';
+            noteUnit.textContent = 'Only units that already exist. An item saved without one ' +
+                                   'cannot take a conversion factor later.';
+            noteUnit.style.color = '#64748b';
+            noteMpn.innerHTML = 'Optional. <code>Make - Part No</code> with spaces around the ' +
+                                'hyphen is split into manufacturer and part number; anything ' +
+                                'else is kept whole.';
+        }
+    }
+
+    function clearItemFields() {
+        descIn.value = ''; unitIn.value = ''; mpnIn.value = '';
+        setItemFields('new', {});
+    }
+
     // An item that is already classified shows its code and is not asked
-    // again — reclassifying belongs on the HSN screen, not here. An item
-    // with none gets the picker, and the choice is written to hsn_items
-    // against the item, so the next purchase order already knows it.
+    // again -- reclassifying belongs on the HSN screen, not here.
     function showItemHsn(hsnId, hsnCode, hsnRate) {
         if (!hsnCell) return;
-
         if (hsnId) {
             const rate = (hsnRate === null || hsnRate === undefined) ? '' : ' — ' + Number(hsnRate).toFixed(2) + '% tax';
             hsnCell.innerHTML =
@@ -78,7 +198,6 @@ document.addEventListener('DOMContentLoaded', function() {
             hsnNotice.style.color = '#64748b';
             return;
         }
-
         let options = '<option value="">— Select HSN —</option>';
         hsnData.forEach(function (h) {
             const r = (h.tax_rate === null || h.tax_rate === undefined) ? '' : ' — ' + Number(h.tax_rate).toFixed(2) + '%';
@@ -96,72 +215,85 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let currentItemId = '';
 
-    function checkStorageLocation(itemId) {
-        if (!itemId) {
-            locationInput.readOnly = false;
-            locationInput.style.backgroundColor = '';
-            locationNotice.style.display = 'none';
-            showItemHsn(null, null, null);
-            return;
-        }
-
+    function loadExisting(itemId) {
+        // Locked the moment the code matches, not when the network answers.
+        // Otherwise the fields sit editable while the request is in flight,
+        // and stay editable for good if it fails.
+        setItemFields('existing', {});
+        noteDesc.textContent = 'Loading from the item master…';
         fetch('/api/item-storage-location/' + itemId)
             .then(res => res.json())
             .then(data => {
-                // Same call, so the HSN costs no extra round trip.
+                setItemFields('existing', data);
                 showItemHsn(data.hsn_id, data.hsn_code, data.hsn_rate);
-
                 if (data.exists) {
                     locationInput.value = data.location;
                     locationInput.readOnly = true;
-                    locationInput.style.backgroundColor = '#f1f5f9';
-                    locationNotice.innerText = '🔒 Item already assigned to location "' + data.location + '" (' + data.physical_availability + ' in stock). New quantity will be added to this location.';
+                    locationInput.style.backgroundColor = LOCKED_BG;
+                    locationNotice.innerText = '🔒 Item already assigned to location "' + data.location +
+                        '" (' + data.physical_availability + ' in stock). New quantity will be added to this location.';
                     locationNotice.style.display = 'block';
                 } else {
-                    if (locationInput.readOnly) {
-                        locationInput.readOnly = false;
-                        locationInput.style.backgroundColor = '';
-                        locationInput.value = '';
-                    }
+                    locationInput.readOnly = false;
+                    locationInput.style.backgroundColor = '';
                     locationNotice.style.display = 'none';
                 }
             })
             .catch(err => {
-                console.error('Error fetching item location:', err);
+                console.error('Error fetching item:', err);
+                // The item exists, so its fields stay locked. They are simply
+                // not filled in, which is honest; editing them here would not
+                // change the master anyway.
+                setItemFields('existing', {});
+                noteDesc.textContent = 'Could not load this item’s details. The stock entry ' +
+                                       'will still save against it.';
+                noteDesc.style.color = '#8a5b12';
                 showItemHsn(null, null, null);
             });
     }
 
     function validateInput() {
-        const val = searchInput.value;
+        const val = searchInput.value.trim();
         const options = datalist.options;
         let matchedId = '';
-        
         for (let i = 0; i < options.length; i++) {
-            if (options[i].value === val) {
-                matchedId = options[i].getAttribute('data-id');
-                break;
-            }
+            if (options[i].value === val) { matchedId = options[i].getAttribute('data-id'); break; }
         }
-        
+
         hiddenInput.value = matchedId;
-        
-        if (matchedId !== currentItemId) {
-            currentItemId = matchedId;
-            checkStorageLocation(matchedId);
-        }
-        
-        if (val === '') {
-            searchInput.setCustomValidity('');
-        } else if (matchedId) {
-            searchInput.setCustomValidity('');
+        searchInput.setCustomValidity('');
+
+        if (matchedId) {
+            newCodeInput.value = '';
+            codeNotice.textContent = 'Already in the item master — its details are shown below.';
+            codeNotice.style.color = '#2f6b5f';
+            modeLine.textContent = 'Adding stock to an item that already exists.';
+            if (matchedId !== currentItemId) { currentItemId = matchedId; loadExisting(matchedId); }
         } else {
-            searchInput.setCustomValidity('Please select a valid item code from the list.');
+            currentItemId = '';
+            newCodeInput.value = val;
+            locationInput.readOnly = false;
+            locationInput.style.backgroundColor = '';
+            locationNotice.style.display = 'none';
+            showItemHsn(null, null, null);
+            if (val === '') {
+                codeNotice.textContent = 'Existing codes are suggested as you type.';
+                codeNotice.style.color = '#64748b';
+                modeLine.textContent = 'Type a code. If it is already in the master its details fill in ' +
+                                       'below; if it is not, fill them in and the item is created.';
+                clearItemFields();
+            } else {
+                codeNotice.textContent = 'Not in the item master — it will be created when you save.';
+                codeNotice.style.color = '#8a5b12';
+                modeLine.textContent = 'Creating a new item as well as its stock.';
+                setItemFields('new', {});
+            }
         }
     }
 
     searchInput.addEventListener('input', validateInput);
     searchInput.addEventListener('change', validateInput);
+    validateInput();   // a rejected submission comes back with the code still in the box
 });
 </script>
 {% endblock %}

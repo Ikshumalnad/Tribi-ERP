@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / <a href="/vendors">Vendors</a> /
+    {{ 'Edit vendor' if mode == 'edit' else 'Add vendor' }}
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>{{ 'Edit Vendor' if mode == 'edit' else 'Add Vendor' }}</h1>
+    <a href="/vendors" class="btn-outline">← Back</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="form-card">
+<form method="POST"
+      action="{{ '/vendors/%s/edit'|format(vendor.vendor_id) if mode == 'edit' else '/vendors/add' }}">
+
+    <h3 style="font-size:15px; margin:0 0 14px; color:#1a2e4a;">Who they are</h3>
+
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px;">
+        <div class="form-group" style="flex:1; min-width:200px; margin:0;">
+            <label style="font-weight:600;">Short name <span class="required">*</span></label>
+            <input type="text" name="short_name" maxlength="100" required class="input-field"
+                   style="width:100%;" value="{{ vendor.short_name or '' }}">
+            <div style="font-size:12px; color:#64748b; margin-top:5px;">
+                What people call them. This is the key the vendor import matches
+                on, so it has to be unique.
+            </div>
+        </div>
+        <div class="form-group" style="flex:1; min-width:200px; margin:0;">
+            <label style="font-weight:600;">Full name</label>
+            <input type="text" name="full_name" maxlength="200" class="input-field"
+                   style="width:100%;" value="{{ vendor.full_name or '' }}">
+            <div style="font-size:12px; color:#64748b; margin-top:5px;">
+                The registered name, for the purchase order. Left blank, the
+                short name stands for both.
+            </div>
+        </div>
+    </div>
+
+    <h3 style="font-size:15px; margin:22px 0 14px; color:#1a2e4a;">Tax and money</h3>
+
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px;">
+        <div class="form-group" style="flex:1; min-width:220px; margin:0;">
+            <label style="font-weight:600;">GST number</label>
+            <input type="text" name="gst_no" maxlength="20" class="input-field"
+                   style="width:100%; text-transform:uppercase;"
+                   placeholder="29AAPCS7981Q1ZW"
+                   value="{{ vendor.gst_no or '' }}">
+            <div style="font-size:12px; color:#64748b; margin-top:5px;">
+                15 characters. Leave it blank if they have none — that is
+                normal for an overseas supplier.
+            </div>
+        </div>
+        {% if 'tax_mode' in fields %}
+        <div class="form-group" style="flex:1; min-width:220px; margin:0;">
+            <label style="font-weight:600;">How their tax is charged</label>
+            <select name="tax_mode" class="input-field" style="width:100%;">
+                <option value="1" {% if vendor.tax_mode == 1 %}selected{% endif %}>Within the state — CGST + SGST, half each</option>
+                <option value="2" {% if vendor.tax_mode == 2 %}selected{% endif %}>Another state — IGST, the whole rate</option>
+                <option value="0" {% if vendor.tax_mode == 0 %}selected{% endif %}>Outside India — neither</option>
+            </select>
+            <div style="font-size:12px; color:#64748b; margin-top:5px;">
+                The HSN code decides the rate. This decides how that rate is split.
+            </div>
+        </div>
+        {% endif %}
+        {% if 'currency_id' in fields %}
+        <div class="form-group" style="flex:1; min-width:160px; margin:0;">
+            <label style="font-weight:600;">They invoice in</label>
+            <select name="currency_id" class="input-field" style="width:100%;">
+                <option value="">—</option>
+                {% for c in currencies %}
+                <option value="{{ c.curr_id }}" {% if vendor.currency_id == c.curr_id %}selected{% endif %}>
+                    {{ c.curr_code }} — {{ c.curr_name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+    </div>
+
+    <h3 style="font-size:15px; margin:22px 0 14px; color:#1a2e4a;">Where they are</h3>
+
+    {% for f in ['address_line_1','address_line_2','address_line_3','address_line_4'] %}
+      {% if f in fields %}
+      <div class="form-group" style="margin-bottom:10px;">
+        <label style="font-weight:600;">Address line {{ loop.index }}{% if loop.index == 1 %} <span class="required">*</span>{% endif %}</label>
+        <input type="text" name="{{ f }}" maxlength="200" class="input-field"
+               style="width:100%;" value="{{ vendor[f] or '' }}">
+      </div>
+      {% endif %}
+    {% endfor %}
+
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px;">
+        {% for f, label in [('city','City'),('state','State'),('pincode','Pincode'),('country','Country')] %}
+          {% if f in fields %}
+          <div class="form-group" style="flex:1; min-width:140px; margin:0;">
+            <label style="font-weight:600;">{{ label }}</label>
+            <input type="text" name="{{ f }}" maxlength="100" class="input-field"
+                   style="width:100%;" value="{{ vendor[f] or '' }}">
+          </div>
+          {% endif %}
+        {% endfor %}
+    </div>
+
+    <h3 style="font-size:15px; margin:22px 0 14px; color:#1a2e4a;">How to reach them</h3>
+
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:18px;">
+        {% if 'ph_no' in fields %}
+        <div class="form-group" style="flex:1; min-width:180px; margin:0;">
+            <label style="font-weight:600;">Phone</label>
+            <input type="text" name="ph_no" maxlength="50" class="input-field"
+                   style="width:100%;" value="{{ vendor.ph_no or '' }}">
+        </div>
+        {% endif %}
+        {% if 'email_id' in fields %}
+        <div class="form-group" style="flex:1; min-width:220px; margin:0;">
+            <label style="font-weight:600;">Email</label>
+            <input type="email" name="email_id" maxlength="120" class="input-field"
+                   style="width:100%;" value="{{ vendor.email_id or '' }}">
+        </div>
+        {% endif %}
+    </div>
+
+    <button type="submit" class="btn-primary" style="padding:9px 22px; font-weight:600;">
+        {{ 'Save changes' if mode == 'edit' else 'Add vendor' }}
+    </button>
+    <a href="/vendors" class="btn-outline" style="margin-left:8px;">Cancel</a>
+</form>
+</div>
+{% endblock %}

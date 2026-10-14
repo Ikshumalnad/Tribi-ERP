@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Dashboard</a> / Vendors
+</div>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Vendors</h1>
+    <div>
+        <a href="/vendors/add" class="btn-primary" style="padding:9px 18px; font-weight:600;">Add a vendor</a>
+        <a href="/vendors/import" class="btn-outline" style="margin-left:8px;">Import from Excel</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if bad_gst %}
+<div class="alert alert-warning">
+    <strong>{{ bad_gst|length }} vendor(s) have a GST number that is not 15 characters.</strong>
+    These arrived through the import, which does not check the shape. A purchase
+    order will print whatever is stored.
+    <div style="margin-top:8px; font-size:13px;">
+        {% for v in bad_gst %}
+        <a href="/vendors/{{ v.vendor_id }}/edit">{{ v.short_name }}</a>
+        (<code>{{ v.gst_no }}</code>){% if not loop.last %}, {% endif %}
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<form method="GET" action="/vendors" style="margin-bottom:14px;">
+    <input type="text" name="q" value="{{ q or '' }}" class="input-field"
+           placeholder="Search name, GST number, city, phone or email…"
+           style="width:320px; max-width:100%;">
+    <button type="submit" class="btn-outline">Search</button>
+    {% if q %}<a href="/vendors" class="btn-outline" style="margin-left:6px;">Clear</a>{% endif %}
+</form>
+
+<p style="color:#64748b; font-size:13px; margin:0 0 10px;">
+    {{ vendors|length }} vendor{{ '' if vendors|length == 1 else 's' }}{% if q %} matching “{{ q }}”{% endif %}.
+</p>
+
+<table class="data-table" style="width:100%;">
+    <thead>
+        <tr>
+            <th>Short name</th>
+            <th>Full name</th>
+            {% if 'gst_no' in cols %}<th>GST number</th>{% endif %}
+            {% if 'tax_mode' in cols %}<th>Tax</th>{% endif %}
+            {% if 'currency_id' in cols %}<th>Currency</th>{% endif %}
+            {% if 'city' in cols %}<th>City</th>{% endif %}
+            {% if 'ph_no' in cols %}<th>Phone</th>{% endif %}
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for v in vendors %}
+        <tr>
+            <td style="font-weight:600;">{{ v.short_name }}</td>
+            <td style="color:#475569;">{{ v.full_name or '' }}</td>
+            {% if 'gst_no' in cols %}<td><code>{{ v.gst_no or '—' }}</code></td>{% endif %}
+            {% if 'tax_mode' in cols %}
+            <td>{% if v.tax_mode == 1 %}In state{% elif v.tax_mode == 2 %}Other state{% elif v.tax_mode == 0 %}Export{% else %}—{% endif %}</td>
+            {% endif %}
+            {% if 'currency_id' in cols %}<td>{{ currencies.get(v.currency_id, '—') }}</td>{% endif %}
+            {% if 'city' in cols %}<td>{{ v.city or '' }}</td>{% endif %}
+            {% if 'ph_no' in cols %}<td>{{ v.ph_no or '' }}</td>{% endif %}
+            <td><a href="/vendors/{{ v.vendor_id }}/edit" class="btn-outline" style="padding:4px 12px;">Edit</a></td>
+        </tr>
+    {% else %}
+        <tr><td colspan="9" style="color:#64748b; padding:18px;">
+            No vendors{% if q %} matched that search{% endif %}.
+        </td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

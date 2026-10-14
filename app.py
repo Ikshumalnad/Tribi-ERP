@@ -1442,6 +1442,13 @@ def get_vendor_items(cursor):
     return vendor_items
 
 # ─── PO NUMBER GENERATOR ────────────────────────────────
+# POs 0001-0181 of the 2026-27 year were raised in the old system, so the
+# numbering here continues from 0182. Keyed by the financial year's STARTING
+# year, so 1 April 2027 falls back to 0001 on its own. Work order numbering
+# is untouched.
+PO_START = {2026: 182}
+
+
 def generate_po_number(cursor):
     # Find start and end dates of the current financial year
     today = date.today()
@@ -1458,9 +1465,11 @@ def generate_po_number(cursor):
         WHERE date_raised >= %s AND date_raised <= %s
     """, (fy_start, fy_end))
     row = cursor.fetchone()
+
+    start = PO_START.get(today.year if today.month >= 4 else today.year - 1, 1)
     if row and row['max_po'] is not None:
-        return row['max_po'] + 1
-    return 1
+        return max(row['max_po'] + 1, start)
+    return start
 
 # ─── DASHBOARD ──────────────────────────────────────────
 # ─── DASHBOARD ──────────────────────────────────────────
@@ -6190,6 +6199,262 @@ def apply_vendor_import(cursor, rows):
 
 
 # ═══════════════════════════════════════════════════════════
+#  VENDORS — list, add by hand, edit
+#
+#  Until now a vendor could only arrive through /vendors/import, so adding
+#  one meant building a spreadsheet for a single row. These three routes
+#  are the manual path. They write the same table, match on the same key
+#  (short_name) and reuse _insert_with_defaults, so a vendor typed here and
+#  a vendor imported are the same thing afterwards.
+#
+#  Paste this block into app.py anywhere after apply_vendor_import.
+# ═══════════════════════════════════════════════════════════
+
+# A GSTIN is 15 characters: 2 state digits, a 10-character PAN, one entity
+# digit, the letter Z, and one check character. The import does not test this
+# and five vendors came in malformed -- two missing the state code, two with a
+# 9-character PAN, one with a trailing full stop. A person typing one in is
+# the right place to catch it.
+GSTIN_RE = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$')
+
+# Shown in the order a person would fill them in. Only the ones the table
+# actually has are used: the address has been through two shapes, so the
+# column list is read live rather than assumed.
+_VENDOR_FORM_ORDER = [
+    'short_name', 'full_name', 'gst_no', 'tax_mode', 'currency_id',
+    'address_line_1', 'address_line_2', 'address_line_3', 'address_line_4',
+    'city', 'state', 'pincode', 'country', 'ph_no', 'email_id',
+]
+
+
+def _vendor_columns(cursor):
+    """(fields this form may write, every column on the table)."""
+    cols = {c['COLUMN_NAME'] for c in get_table_columns(cursor, 'vendor')}
+    return [f for f in _VENDOR_FORM_ORDER if f in cols], cols
+
+
+def _currency_choices(cursor):
+    cursor.execute("""SELECT curr_id, curr_code, curr_name FROM currency
+                       WHERE COALESCE(curr_is_deleted, 0) = 0
+                       ORDER BY curr_id""")
+    return cursor.fetchall()
+
+
+def _read_vendor_form(form, fields):
+    """Form values, cleaned the way the import cleans spreadsheet cells, so a
+    vendor typed by hand and one imported end up identical."""
+    rec = {}
+    for f in fields:
+        v = (form.get(f) or '').strip()
+        rec[f] = None if is_not_applicable(v) else v
+    if rec.get('gst_no'):
+        rec['gst_no'] = rec['gst_no'].upper().replace(' ', '')
+    # tax_mode is a code and 0 is meaningful -- it is the export mode -- so it
+    # must not be treated as an empty cell.
+    if 'tax_mode' in rec and rec['tax_mode'] is not None:
+        try:
+            rec['tax_mode'] = int(rec['tax_mode'])
+        except (TypeError, ValueError):
+            rec['tax_mode'] = None
+    # 0 is not a currency, so it is dropped rather than written as one.
+    if 'currency_id' in rec and rec['currency_id'] is not None:
+        try:
+            rec['currency_id'] = int(rec['currency_id']) or None
+        except (TypeError, ValueError):
+            rec['currency_id'] = None
+    # The import lets the short name stand for both rather than leaving a
+    # NOT NULL column empty. Same here.
+    if not rec.get('short_name'):
+        rec['short_name'] = rec.get('full_name')
+    if not rec.get('full_name'):
+        rec['full_name'] = rec.get('short_name')
+    return rec
+
+
+def _validate_vendor(cursor, rec, vendor_id=None):
+    """A list of problems, empty when the record is fit to save."""
+    problems = []
+    if not rec.get('short_name'):
+        problems.append("A vendor needs a short name.")
+
+    gst = rec.get('gst_no')
+    if gst and not GSTIN_RE.match(gst):
+        why = f"{len(gst)} characters" if len(gst) != 15 else "the wrong shape"
+        problems.append(
+            f"'{gst}' is not a GST number — it is {why}. A GSTIN is 15: two "
+            f"state digits, a 10-character PAN, one entity character, Z, then "
+            f"one check character, like 29AAPCS7981Q1ZW. Leave it blank if the "
+            f"vendor has none.")
+
+    if rec.get('tax_mode') not in (0, 1, 2, None):
+        problems.append("Tax mode must be within the state, another state, or outside India.")
+
+    if rec.get('currency_id'):
+        cursor.execute("""SELECT curr_id FROM currency
+                           WHERE curr_id = %s AND COALESCE(curr_is_deleted, 0) = 0""",
+                       (rec['currency_id'],))
+        if not cursor.fetchone():
+            problems.append("That currency no longer exists.")
+
+    # short_name is how the import matches, so a second vendor holding the
+    # same one would make the next import update whichever it found first.
+    if rec.get('short_name'):
+        sql = "SELECT vendor_id, short_name, is_deleted FROM vendor WHERE short_name = %s"
+        params = [rec['short_name']]
+        if vendor_id:
+            sql += " AND vendor_id <> %s"
+            params.append(vendor_id)
+        cursor.execute(sql + " LIMIT 1", tuple(params))
+        clash = cursor.fetchone()
+        if clash:
+            if clash.get('is_deleted'):
+                problems.append(
+                    f"A deleted vendor already uses the short name "
+                    f"'{rec['short_name']}'. Restore that one instead, or give "
+                    f"this vendor a different short name.")
+            else:
+                problems.append(
+                    f"'{rec['short_name']}' is already taken by vendor "
+                    f"#{clash['vendor_id']}. Short names have to be unique — the "
+                    f"vendor import matches on them.")
+    return problems
+
+
+@app.route('/vendors')
+def vendor_list():
+    q = (request.args.get('q') or '').strip()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+    fields, cols = _vendor_columns(cursor)
+
+    select = ['vendor_id'] + [f for f in fields if f in cols]
+    sql = f"SELECT {', '.join('`%s`' % c for c in select)} FROM vendor WHERE COALESCE(is_deleted, 0) = 0"
+    params = []
+    if q:
+        like = f"%{q}%"
+        searchable = [c for c in ('short_name', 'full_name', 'gst_no', 'city', 'ph_no', 'email_id')
+                      if c in cols]
+        sql += " AND (" + " OR ".join(f"`{c}` LIKE %s" for c in searchable) + ")"
+        params = [like] * len(searchable)
+    sql += " ORDER BY short_name"
+    cursor.execute(sql, tuple(params))
+    vendors = cursor.fetchall()
+
+    currencies = {int(c['curr_id']): c['curr_code'] for c in _currency_choices(cursor)}
+
+    # Worth surfacing rather than leaving to be found on an invoice: these
+    # came in through the import, which does not check the shape.
+    bad_gst = [v for v in vendors
+               if v.get('gst_no') and not GSTIN_RE.match(str(v['gst_no']).upper().replace(' ', ''))]
+
+    cursor.close()
+    db.close()
+    return render_template('vendor_list.html', vendors=vendors, q=q,
+                           currencies=currencies, bad_gst=bad_gst, cols=cols)
+
+
+@app.route('/vendors/add', methods=['GET', 'POST'])
+def vendor_add():
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+    fields, cols = _vendor_columns(cursor)
+
+    if request.method == 'POST':
+        rec = _read_vendor_form(request.form, fields)
+        problems = _validate_vendor(cursor, rec)
+        if problems:
+            currencies = _currency_choices(cursor)
+            cursor.close()
+            db.close()
+            for p in problems:
+                flash(p, 'error')
+            # Handed back so nothing typed is lost.
+            return render_template('vendor_form.html', vendor=rec, fields=fields,
+                                   currencies=currencies, mode='add')
+        payload = {f: v for f, v in rec.items() if v is not None}
+        if 'is_deleted' in cols:
+            payload['is_deleted'] = 0
+        try:
+            _insert_with_defaults(cursor, 'vendor', payload)
+            db.commit()
+            flash(f"Vendor '{rec['short_name']}' added.", 'success')
+        except Exception as e:
+            db.rollback()
+            flash(f"Could not save that vendor: {e}", 'error')
+            currencies = _currency_choices(cursor)
+            cursor.close()
+            db.close()
+            return render_template('vendor_form.html', vendor=rec, fields=fields,
+                                   currencies=currencies, mode='add')
+        cursor.close()
+        db.close()
+        return redirect(url_for('vendor_list'))
+
+    currencies = _currency_choices(cursor)
+    cursor.close()
+    db.close()
+    # country and tax mode are the same on almost every vendor here.
+    return render_template('vendor_form.html',
+                           vendor={'country': 'India', 'tax_mode': 1, 'currency_id': 1},
+                           fields=fields, currencies=currencies, mode='add')
+
+
+@app.route('/vendors/<int:vendor_id>/edit', methods=['GET', 'POST'])
+def vendor_edit(vendor_id):
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+    fields, cols = _vendor_columns(cursor)
+
+    cursor.execute("SELECT * FROM vendor WHERE vendor_id = %s", (vendor_id,))
+    existing = cursor.fetchone()
+    if not existing:
+        cursor.close()
+        db.close()
+        flash("No such vendor.", 'error')
+        return redirect(url_for('vendor_list'))
+
+    if request.method == 'POST':
+        rec = _read_vendor_form(request.form, fields)
+        problems = _validate_vendor(cursor, rec, vendor_id=vendor_id)
+        if problems:
+            currencies = _currency_choices(cursor)
+            cursor.close()
+            db.close()
+            for p in problems:
+                flash(p, 'error')
+            rec['vendor_id'] = vendor_id
+            return render_template('vendor_form.html', vendor=rec, fields=fields,
+                                   currencies=currencies, mode='edit')
+        # Only what actually changed, so an untouched field is never rewritten.
+        sets, params = [], []
+        for f in fields:
+            if _norm_space(str(rec.get(f) or '')) != _norm_space(str(existing.get(f) or '')):
+                sets.append(f"`{f}` = %s")
+                params.append(rec.get(f))
+        if sets:
+            params.append(vendor_id)
+            try:
+                cursor.execute(f"UPDATE vendor SET {', '.join(sets)} WHERE vendor_id = %s",
+                               tuple(params))
+                db.commit()
+                flash(f"{len(sets)} field(s) updated on '{rec['short_name']}'.", 'success')
+            except Exception as e:
+                db.rollback()
+                flash(f"Could not save those changes: {e}", 'error')
+        else:
+            flash("Nothing changed.", 'success')
+        cursor.close()
+        db.close()
+        return redirect(url_for('vendor_list'))
+
+    currencies = _currency_choices(cursor)
+    cursor.close()
+    db.close()
+    return render_template('vendor_form.html', vendor=existing, fields=fields,
+                           currencies=currencies, mode='edit')
+
+
+# ═══════════════════════════════════════════════════════════
 #  HSN IMPORT
 # ═══════════════════════════════════════════════════════════
 
@@ -6968,10 +7233,96 @@ def storage_list():
 def storage_add():
     db = get_db()
     cursor = db.cursor(dictionary=True)
+
     if request.method == 'POST':
-        item_id = request.form['item_id']
-        store_location = request.form['store_location']
-        physical_availability = float(request.form.get('physical_availability', 0) or 0)
+        item_id = (request.form.get('item_id') or '').strip()
+        new_code = (request.form.get('new_item_code') or '').strip()
+        store_location = (request.form.get('store_location') or '').strip()
+        try:
+            physical_availability = float(request.form.get('physical_availability') or 0)
+        except (TypeError, ValueError):
+            physical_availability = 0.0
+
+        created_item = False
+
+        # ── a code nobody has seen before ───────────────────────────────
+        # The storage IMPORT creates the item master row as well as the
+        # stock, so a code typed here has to do the same or the two routes
+        # into the same screen would behave differently. Same helpers, so an
+        # item typed here and one imported are identical afterwards.
+        if not item_id and new_code:
+            if not is_usable_item_code(new_code):
+                flash(f"'{new_code}' does not look like a part number. A date or "
+                      f"a row of punctuation is rejected here for the same reason "
+                      f"the import rejects it.", 'error')
+                return _storage_add_form(cursor, db, request.form)
+
+            # No is_deleted filter, deliberately: the import matches the same
+            # way, and a soft-deleted code still owns that item_code.
+            cursor.execute("SELECT item_id, `desc`, is_deleted FROM items WHERE item_code = %s LIMIT 1",
+                           (new_code,))
+            clash = cursor.fetchone()
+            if clash:
+                if clash.get('is_deleted'):
+                    flash(f"'{new_code}' belongs to a deleted item ({clash.get('desc') or 'no description'}). "
+                          f"Restore that one rather than creating a second.", 'error')
+                else:
+                    flash(f"'{new_code}' already exists ({clash.get('desc') or 'no description'}). "
+                          f"Pick it from the list instead of typing it.", 'error')
+                return _storage_add_form(cursor, db, request.form)
+
+            desc = (request.form.get('new_item_desc') or '').strip()
+            if not desc:
+                flash("A new item needs a description.", 'error')
+                return _storage_add_form(cursor, db, request.form)
+
+            unit_text = (request.form.get('new_item_unit') or '').strip()
+            mfr_name, mpn = split_manufacturer_mpn(
+                (request.form.get('new_item_mpn') or '').strip() or None)
+
+            unit_cache, created_units = {}, []
+            mfr_cache, created_mfrs = {}, []
+            unit_id = _resolve_unit(cursor, unit_text, unit_cache, created_units)
+            # Checked here and not only in the browser. An item saved with no
+            # unit cannot take a conversion factor -- the Unit Conversions
+            # screen refuses it outright -- and nothing downstream asks again,
+            # so it would stay unitless for good. That is how the work order
+            # and GRN paths have been creating items; this one does not.
+            if not unit_id:
+                db.rollback()
+                if unit_text:
+                    flash("'%s' is not a unit this system can use. "
+                          "Pick one from the list." % unit_text, 'error')
+                else:
+                    flash('A new item needs a unit. Without one it can never '
+                          'take a conversion factor.', 'error')
+                return _storage_add_form(cursor, db, request.form)
+            mfr_id = _resolve_manufacturer(cursor, mfr_name, mfr_cache, created_mfrs)
+
+            values = {'item_code': new_code, 'desc': desc[:100], 'is_deleted': 0}
+            if unit_id:
+                values['unit_id'] = unit_id
+            if mfr_id:
+                values['mfr_id'] = mfr_id
+            if mpn:
+                values['mpn'] = mpn[:100]
+            try:
+                item_id = _insert_with_defaults(cursor, 'items', values)
+            except Exception as e:
+                db.rollback()
+                flash(f"Could not create that item: {e}", 'error')
+                return _storage_add_form(cursor, db, request.form)
+            created_item = True
+            if created_units:
+                flash(f"'{', '.join(created_units)}' was not an existing unit, so it has been "
+                      f"created with no base unit — it cannot convert to anything until "
+                      f"someone sets one.", 'warning')
+            if created_mfrs:
+                flash(f"New manufacturer added: {', '.join(created_mfrs)}.", 'success')
+
+        if not item_id:
+            flash("Choose an existing item, or type a new item code and describe it.", 'error')
+            return _storage_add_form(cursor, db, request.form)
 
         # The HSN lives on the item, in hsn_items — storage has no column for
         # it and one row per item, so classifying here classifies the item
@@ -6994,8 +7345,11 @@ def storage_add():
         else:
             cursor.execute("""INSERT INTO storage (item_id, store_location, physical_availability, created_at)
                               VALUES (%s, %s, %s, NOW())""",
-                           (item_id, store_location, physical_availability))
-            flash('Storage entry added successfully.', 'success')
+                           (item_id, store_location or 'Main Store', physical_availability))
+            if created_item:
+                flash(f"Item '{new_code}' created and {physical_availability} recorded in stock.", 'success')
+            else:
+                flash('Storage entry added successfully.', 'success')
 
         if not resolved_hsn:
             flash('This item has no HSN code yet. A purchase order will ask '
@@ -7006,12 +7360,24 @@ def storage_add():
         db.close()
         return redirect(url_for('storage_list'))
 
+    return _storage_add_form(cursor, db, None)
+
+
+def _storage_add_form(cursor, db, form):
+    """Render the storage form. `form` is the rejected submission, handed back
+    so nothing typed is lost; None on a fresh GET."""
     cursor.execute("SELECT item_id, item_code, `desc` as item_desc FROM items WHERE is_deleted=0 ORDER BY item_code")
     items = cursor.fetchall()
     hsns = hsn_choices(cursor)
+    # Only units that already exist. A unit typed freehand would be created
+    # with no base family and could never convert to anything.
+    cursor.execute("""SELECT unit_id, unit_short_name, unit_name
+                        FROM units ORDER BY unit_name""")
+    units = cursor.fetchall()
     cursor.close()
     db.close()
-    return render_template('storage_add.html', items=items, hsns=hsns)
+    return render_template('storage_add.html', items=items, hsns=hsns,
+                           units=units, form=form or {})
 
 
 # ─── API ITEM STORAGE LOCATION ─────────────────────────
@@ -7024,15 +7390,33 @@ def api_item_storage_location(item_id):
     # Whether this item is classified decides if the form shows its HSN or
     # asks for one, so the same call that fills the location answers that too.
     hsn = hsn_for_item(cursor, item_id)
+    # The storage form shows description, unit and MPN for every item, filled
+    # and read-only once a known code is picked, so the same fields are on
+    # screen whether the item exists or is about to be created.
+    cursor.execute("""SELECT i.`desc` AS item_desc, u.unit_short_name, i.mpn,
+                             m.mfr_short_name
+                        FROM items i
+                        LEFT JOIN units u        ON u.unit_id = i.unit_id
+                        LEFT JOIN manufacturer m ON m.mfr_id  = i.mfr_id
+                       WHERE i.item_id = %s""", (item_id,))
+    detail = cursor.fetchone() or {}
     cursor.close()
     db.close()
+    mpn_shown = detail.get('mpn') or ''
+    if detail.get('mfr_short_name') and mpn_shown:
+        mpn_shown = f"{detail['mfr_short_name']} - {mpn_shown}"
+    elif detail.get('mfr_short_name'):
+        mpn_shown = detail['mfr_short_name']
     return jsonify({
         'exists': bool(row),
         'location': (row['store_location'] if row else None),
         'physical_availability': (float(row['physical_availability'] or 0) if row else None),
         'hsn_id': (hsn['hsn_id'] if hsn else None),
         'hsn_code': (hsn['hsn_code'] if hsn else None),
-        'hsn_rate': (float(hsn['tax_rate']) if hsn and hsn['tax_rate'] is not None else None)
+        'hsn_rate': (float(hsn['tax_rate']) if hsn and hsn['tax_rate'] is not None else None),
+        'item_desc': detail.get('item_desc') or '',
+        'unit_short_name': detail.get('unit_short_name') or '',
+        'mpn': mpn_shown
     })
 
 # ─── STORAGE EDIT ───────────────────────────────────────
@@ -7863,9 +8247,25 @@ def settings_user_edit(user_id):
     return redirect(url_for('settings'))
 
 
+# ─── STARTUP WORK RUNS ON IMPORT, NOT ONLY UNDER python app.py ──────
+#
+# These two used to sit inside the __main__ block below. That block only
+# runs when the app is started as 'python app.py'. Started through a WSGI
+# server — gunicorn, waitress, mod_wsgi, a service wrapper — Python
+# imports this file as a module, __name__ is not '__main__', and neither
+# call happened. After tribi_go_live.sql truncates users, that left no
+# account to log in with and no way to find out why from the login page.
+#
+# Both are safe on every import and safe to run concurrently:
+# seed_admin_user() inserts only when users is empty, every statement in
+# it is wrapped in try/except, and username is UNIQUE — so if two workers
+# start at the same instant, the loser's duplicate-key error is caught
+# and printed rather than crashing the worker.
+seed_admin_user()
+ensure_schema_columns()
+
+
 if __name__ == '__main__':
-    seed_admin_user()
-    ensure_schema_columns()
 
     # ─── DEBUG IS OFF UNLESS ASKED FOR ──────────────────────────
     #
