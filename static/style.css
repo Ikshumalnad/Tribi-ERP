@@ -5,7 +5,7 @@
 }
 
 html, body {
-    font-family: Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     background: #f4f6f9;
     color: #333;
     width: 100%;
@@ -587,4 +587,337 @@ html.in-reference-mode .page {
     overflow-x: auto !important;
     overflow-y: auto !important;
     min-height: 100%;
-}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   v1.1.a — brand, headings, search boxes
+   Appended last on purpose: these rules replace earlier ones of the same
+   weight by coming after them, so nothing above needs to be hunted down.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Brand ────────────────────────────────────────────────────────────── */
+.navbar a.brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+    margin-right: 16px;
+}
+.navbar a.brand:hover { background: transparent; }
+
+/* The logo is black on white, and the bar is navy, so it sits on a white
+   tile rather than being recoloured -- the brand colours stay as they are. */
+.brand-logo {
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+    padding: 5px 11px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.brand-logo img {
+    height: 30px;
+    width: auto;
+    display: block;
+}
+.brand-erp {
+    color: #fff;
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    line-height: 1;
+}
+.navbar .brand-version {
+    align-self: center;
+    vertical-align: baseline;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 999px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* ─── Headings ─────────────────────────────────────────────────────────── */
+/* Plain and even: one weight for every heading on every page. Templates set
+   weights inline all over -- 500, 600, 700, 800 -- which is where the uneven
+   look came from, so the weight is fixed here with !important. Size and
+   colour stay with each heading. */
+.page-header h1 {
+    font-size: 22px;
+    font-weight: 600 !important;
+    color: #1a2e4a;
+    letter-spacing: 0;
+}
+.page h1,
+.page h2,
+.page h3,
+.page h4 {
+    font-weight: 600 !important;
+    letter-spacing: 0;
+}
+
+/* ─── Filter bars ──────────────────────────────────────────────────────── */
+/* These had no rules at all, which is why the Search button sat straight
+   on top of the table underneath on BOM, Work orders and Storage. */
+.filter-bar,
+.search-bar {
+    margin-bottom: 22px;
+}
+.filter-bar form,
+.search-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+/* ─── Search boxes and the selects beside them ─────────────────────────── */
+/* Element + class, so these outrank the older `.search-bar input` rule
+   (same weight, and this one comes later) on the HSN and Vendor pages. */
+input.search-input,
+select.search-input,
+select.filter-select {
+    height: 40px;
+    padding: 0 16px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #1e293b;
+    background-color: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+input.search-input[type="text"] {
+    min-width: 260px;
+    padding-left: 40px;
+    /* A magnifier in the box says "search" so the placeholder does not have to. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: 15px center;
+    background-size: 16px;
+}
+select.search-input,
+select.filter-select {
+    min-width: 160px;
+    padding-right: 12px;
+    cursor: pointer;
+}
+input.search-input:hover,
+select.search-input:hover,
+select.filter-select:hover { border-color: #94a3b8; }
+input.search-input:focus,
+select.search-input:focus,
+select.filter-select:focus {
+    border-color: #1a2e4a;
+    box-shadow: 0 0 0 3px rgba(26, 46, 74, 0.12);
+}
+.search-input::placeholder { color: #94a3b8; }
+
+/* Buttons in a filter bar line up with the boxes beside them. */
+.filter-bar .btn,
+.filter-bar .btn-dark,
+.filter-bar .btn-outline,
+.filter-bar .btn-secondary,
+.search-bar .btn,
+.search-bar .btn-dark,
+.search-bar .btn-outline,
+.search-bar .btn-secondary {
+    height: 40px;
+    padding: 0 20px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+
+/* ─── Navigation and type, v1.1.b ──────────────────────────────────────── */
+/* The section links are what people scan for, so they carry the weight
+   rather than the headings under them. Bold text is wider, so nothing in the
+   bar may wrap: a two-line "Purchase orders" is what it looked like before
+   this rule. */
+.navbar a {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #ffffff;
+    padding: 6px 8px;
+    white-space: nowrap;
+}
+.navbar .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: 13px;
+}
+.navbar .nav-right a {
+    font-size: 13.5px;
+    font-weight: 700;
+}
+/* The user's name is information, not a link, so it stays regular weight. */
+.navbar .nav-right > span {
+    font-weight: 400;
+}
+
+/* Form controls do not inherit the page font by default, so every input,
+   select and button was quietly falling back to the browser's own. */
+input, select, textarea, button, optgroup {
+    font-family: inherit;
+}
+code, kbd, pre, samp {
+    font-family: Consolas, "SF Mono", Menlo, "Liberation Mono", monospace;
+}
+
+/* ═══ v1.1.c — selected and unselected sections ═══════════════════════════
+   Every link keeps the same weight whether selected or not, so nothing in the
+   bar shifts sideways when you move between pages. The difference is carried
+   by brightness, a soft tile, and a short bar under the label.            */
+.navbar a.nav-link {
+    position: relative;
+    color: rgba(255, 255, 255, 0.70);
+    border-radius: 6px;
+    transition: color 0.15s, background-color 0.15s;
+}
+.navbar a.nav-link:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+}
+.navbar a.nav-link.is-active {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.14);
+}
+.navbar a.nav-link.is-active::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: -12px;         /* sits flush on the bar's bottom edge */
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+    background: #fff;
+}
+.navbar a.nav-link:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.85);
+    outline-offset: 1px;
+}
+.navbar .nav-user {
+    color: rgba(255, 255, 255, 0.70);
+    font-size: 13px;
+    font-weight: 400;
+    margin-right: 8px;
+    /* Names vary in length; a long one trims with "…" (hover shows it all)
+       instead of pushing the bar off the edge of a laptop screen. */
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+@media (max-width: 1365px) {
+    .navbar .nav-user { max-width: 150px; }
+}
+.navbar a.nav-logout {
+    color: #fca5a5;
+    padding: 6px 8px;
+}
+.navbar a.nav-logout:hover {
+    color: #fecaca;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+}
+
+/* ─── Dashboard greeting ──────────────────────────────────────────────── */
+.greeting h1 {
+    font-size: 24px;
+    font-weight: 600;
+    color: #1a2e4a;
+}
+.greeting .greeting-sub {
+    font-size: 13px;
+    color: #64748b;
+    margin-bottom: 24px;
+}
+
+/* ─── Dashboard greeting card (v1.1.d) ────────────────────────────────── */
+.greet-card {
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 24px 28px;
+    margin-bottom: 24px;
+    border-radius: 14px;
+    color: #fff;
+    background: linear-gradient(120deg, #1a2e4a 0%, #24406a 60%, #2f5687 100%);
+    box-shadow: 0 6px 18px -8px rgba(26, 46, 74, 0.55);
+}
+/* Two soft rings on the right: depth without a picture to load. */
+.greet-card::before,
+.greet-card::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+}
+.greet-card::before {
+    width: 260px; height: 260px;
+    right: -70px; top: -120px;
+    background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 70%);
+}
+.greet-card::after {
+    width: 180px; height: 180px;
+    right: 150px; bottom: -120px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.greet-icon {
+    flex-shrink: 0;
+    width: 56px; height: 56px;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.greet-icon .ico { width: 28px; height: 28px; display: none; }
+.greet-card[data-part="morning"]   .ico-morning   { display: block; color: #fcd34d; }
+.greet-card[data-part="afternoon"] .ico-afternoon { display: block; color: #fbbf24; }
+.greet-card[data-part="evening"]   .ico-evening   { display: block; color: #c7d2fe; }
+.greet-text { flex: 1; min-width: 0; position: relative; }
+.greet-hello {
+    font-size: 15px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.78);
+    letter-spacing: 0.2px;
+}
+.page .greet-card h1.greet-name {
+    margin: 2px 0 6px;
+    font-size: 26px;
+    font-weight: 700 !important;
+    color: #fff;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.greet-org {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.65);
+}
+.greet-org .dot { margin: 0 6px; }
+.greet-when {
+    position: relative;
+    flex-shrink: 0;
+    text-align: right;
+    padding-left: 22px;
+    border-left: 1px solid rgba(255, 255, 255, 0.16);
+}
+.greet-day  { font-size: 12px; color: rgba(255,255,255,0.65); text-transform: uppercase; letter-spacing: 0.8px; }
+.greet-date { font-size: 17px; font-weight: 700; margin-top: 2px; }
+.greet-time { font-size: 13px; color: rgba(255,255,255,0.78); margin-top: 2px; font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+    .greet-when { display: none; }
+}

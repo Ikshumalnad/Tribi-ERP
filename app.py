@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 import mysql.connector
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from flask import g  # to prevent database timeout
 import openpyxl
 import re
@@ -64,7 +64,7 @@ def _load_secret_key():
 app.secret_key = _load_secret_key()
 
 # Application version shown in the navbar. Update this one line on each release.
-APP_VERSION = '1.0.a'
+APP_VERSION = '1.1.e'
 
 # Decimal places kept on every quantity.
 #
@@ -77,6 +77,62 @@ APP_VERSION = '1.0.a'
 # Rounding here at six while the column holds three just moves the truncation
 # somewhere less visible.
 QTY_DP = 6
+PRICE_DP = 4              # unit prices: po_items.unit_price is DECIMAL(14,4)
+
+
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+
+
+def fmt_qty(v, places=2, sep=True):
+    """A quantity as a person reads it: at most two decimals, no trailing zeros.
+
+    DISPLAY ONLY. Every quantity column is DECIMAL(14,6) and keeps its full
+    precision in the database; nothing here rounds what is stored. Without
+    this, MySQL hands back Decimal('1687.000000') and the template prints all
+    six places, and a float total over four thousand rows drifts to
+    4,700,580.049799999.
+
+      1687.000000   ->  1,687
+      42.500000     ->  42.5
+      23.245300     ->  23.25
+      0.995         ->  1         (half-up, as people round -- not 0.99)
+
+    Rounding is done in Decimal, half-up. Python's own round() works on the
+    binary float, where 0.995 is really 0.99499..., so it gives 0.99.
+
+    A real quantity smaller than the rounding step would otherwise read as 0,
+    which says "none" when there is some. It reads "< 0.01" instead, and
+    float noise below the stored precision reads 0.
+
+    sep=False drops the thousands separator, for any number a script might
+    later read back with parseFloat, which stops at the first comma.
+    """
+    if v is None or v == '':
+        return ''
+    try:
+        d = v if isinstance(v, Decimal) else Decimal(str(v))
+    except (InvalidOperation, ValueError, TypeError):
+        return v
+    if not d.is_finite():
+        return str(v)
+    # Below the database's own precision (6 places) a value is arithmetic
+    # noise -- 0.1 + 0.2 - 0.3 is 5.5e-17, not a quantity -- so it is zero.
+    if abs(d) < Decimal('0.0000005'):
+        return '0'
+    r = d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    if r == 0:
+        # Some, but less than the smallest step shown. Printing 0 would say
+        # "none"; printing 0.000041 is the long tail people asked to lose.
+        step = f"0.{'0' * (places - 1)}1"
+        return f"< {step}" if d > 0 else f"> -{step}"
+    s = f"{r:,f}" if sep else f"{r:f}"
+    if '.' in s:
+        s = s.rstrip('0').rstrip('.')
+    return '0' if s in ('', '-0') else s
+
+
+# Available in every template as {{ value|qty }}.
+app.jinja_env.filters['qty'] = fmt_qty
 
 # Role restrictions are OFF for this deployment: every signed-in user can do
 # everything, including reviewing, approving, cancelling, short closing and
@@ -113,12 +169,22 @@ _DO_NOT_STUFF_RE = re.compile(r'do\s*not\s*(stuff|populate|place|mount|fit)', re
 # ─── DATABASE CONNECTION SETTINGS ───────────────────────
 # One place for the connection details, used by every connect() call below.
 # MariaDB on port 3307; utf8mb4 so the rupee sign and other symbols store correctly.
+# The port differs by machine -- 3306 on the laptop, 3307 where MariaDB was
+# installed alongside MySQL and the installer moved it. Reading it from the
+# environment means the same file runs in both places, so copying a new app.py
+# over no longer silently points it at a port nothing is listening on.
+#
+#   set TRIBI_DB_PORT=3307        (cmd, this window)
+#   $env:TRIBI_DB_PORT = '3307'   (PowerShell, this window)
+#
+# A wrong port fails loudly at the first query, which is the right way for it
+# to fail.
 DB_CONFIG = {
-    'host': "localhost",
-    'port': 3307,
-    'user': "root",
-    'password': "srigowri",
-    'database': "tribi_db",
+    'host': os.environ.get('TRIBI_DB_HOST', "localhost"),
+    'port': int(os.environ.get('TRIBI_DB_PORT', 3306)),
+    'user': os.environ.get('TRIBI_DB_USER', "root"),
+    'password': os.environ.get('TRIBI_DB_PASSWORD', "srigowri"),
+    'database': os.environ.get('TRIBI_DB_NAME', "tribi_db"),
     'charset': "utf8mb4",
     'collation': "utf8mb4_unicode_ci",
 }
@@ -184,14 +250,43 @@ def get_db():
 
     return conn
 
+# Work order status is derived from what has been issued, not typed into a
+# form. Three states cover what the shop floor actually distinguishes: it is
+# open, it is finished, or it was called off. 'In Progress', 'Active' and
+# 'Reopened' said nothing 'Open' does not, and nothing ever set them apart.
+WO_OPEN, WO_CLOSED, WO_CANCELLED = 0, 3, 4
+
+# Rows written before this change may still hold 1, 2 or 5. They are shown as
+# Open rather than left to render blank, and refresh_wo_status rewrites each
+# one the first time its work order is looked at or issued against.
 STATUS_MAP = {
     0: ('Open', 'badge-open'),
-    1: ('In Progress', 'badge-inprogress'),
-    2: ('Active', 'badge-active'),
+    1: ('Open', 'badge-open'),
+    2: ('Open', 'badge-open'),
     3: ('Closed', 'badge-closed'),
     4: ('Cancelled', 'badge-cancelled'),
-    5: ('Reopened', 'badge-reopened')
+    5: ('Open', 'badge-open'),
 }
+
+# What the Edit screen may set. Closed is absent on purpose: a work order is
+# closed by issuing the last of its material, not by somebody saying so.
+WO_STATUS_CHOICES = [
+    (WO_OPEN, 'Open'),
+    (WO_CANCELLED, 'Cancelled'),
+]
+
+# What the list screen filters by. Three entries, not six, and none of them
+# repeated -- iterating STATUS_MAP would now offer 'Open' four times.
+WO_FILTER_CHOICES = [
+    (WO_OPEN, 'Open'),
+    (WO_CLOSED, 'Closed'),
+    (WO_CANCELLED, 'Cancelled'),
+]
+
+# Legacy 1, 2 and 5 all mean Open. Normalising in the comparison rather than
+# in the table means the filter is right whether or not the tidy-up SQL has
+# been run.
+WO_STATUS_NORMALISED = "(CASE WHEN wo.status IN (3, 4) THEN wo.status ELSE 0 END)"
 
 # PO short close reuses po_status (a VARCHAR, so no schema change needed).
 SHORT_CLOSED_STATUS = 'Short Closed'
@@ -330,47 +425,239 @@ def get_financial_year_start(cursor=None, date_obj=None):
     return fy
 
 
-def generate_wo_number(cursor):
-    fy = get_financial_year(cursor=cursor)
-    cursor.execute("""SELECT wo_number FROM work_order 
-                      WHERE wo_number LIKE %s 
-                      ORDER BY wo_id DESC LIMIT 1""", (f'%/{fy}',))
-    last = cursor.fetchone()
-    if last and last.get('wo_number'):
-        try:
-            seq = int(last['wo_number'].split('/')[0]) + 1
-        except (ValueError, IndexError):
-            seq = 2537
-    else:
-        seq = 2537
-    return f"{seq}/{fy}"
+def generate_wo_number(cursor, with_seq=False):
+    """Next work order number, from the format and start set in Settings.
+
+    The default -- '{seq}/{fy}', no padding, starting at 2537 -- is exactly
+    what this always produced, so nothing changes until somebody edits it.
+    """
+    fmt, pad, ctx, start, fy = wo_numbering(cursor)
+    return next_in_series(cursor, 'work_order', 'wo_number', fmt, pad, ctx, start,
+                          id_col='wo_id',
+                          restart_after=restart_mark(cursor, f'wo_restart_after_{fy}'),
+                          with_seq=with_seq)
 
 
-def generate_grn_number(cursor):
+# ─── DOCUMENT NUMBERING ─────────────────────────────────
+#
+# PO and GRN numbers are built from a format with placeholders, set on the
+# Settings page:
+#
+#   {fy}        the financial year label            2026-2027
+#   {fy_start}  the year that financial year starts 2026
+#   {year}      PO: calendar year it was raised     2026
+#               GRN: the year the Financial Year card's GRN option picks --
+#               exactly what GRN numbers have always used
+#   {seq}       the running number, zero-padded     0182
+#   {ver}       PO only: the amendment version      0
+#
+# The defaults reproduce the numbers the system already issues, so nothing
+# changes until somebody changes it.
+DEFAULT_PO_FORMAT = '{fy}/{seq}.{ver}'
+DEFAULT_GRN_FORMAT = 'GRN-{year}-{seq}'
+DEFAULT_NUMBER_PAD = 4
+
+# Work orders have always been '2537/2026-2027': the number first, unpadded,
+# counting from 2537 in each financial year. One digit of padding is "no
+# padding", which keeps that exactly.
+DEFAULT_WO_FORMAT = '{seq}/{fy}'
+DEFAULT_WO_PAD = 1
+DEFAULT_WO_START = 2537
+
+NUMBERING_TOKENS = {
+    'po':  ('fy', 'fy_start', 'year', 'seq', 'ver'),
+    'grn': ('fy', 'fy_start', 'year', 'seq'),
+    'wo':  ('fy', 'fy_start', 'year', 'seq'),
+}
+GRN_NO_WIDTH = 50          # grn.grn_no is varchar(50)
+WO_NO_WIDTH = 50           # work_order.wo_number is varchar(50)
+
+
+def numbering_problems(kind, fmt, pad):
+    """What is wrong with a numbering format, or an empty list if nothing."""
+    problems = []
+    fmt = (fmt or '').strip()
+    if not fmt:
+        return ['The format cannot be empty.']
+    tokens = re.findall(r'\{([^{}]*)\}', fmt)
+    if tokens.count('seq') != 1:
+        problems.append('The format must contain {seq} exactly once — it is '
+                        'where the running number goes.')
+    unknown = sorted({t for t in tokens if t not in NUMBERING_TOKENS[kind]})
+    if unknown:
+        problems.append('Not a placeholder this format understands: '
+                        + ', '.join('{' + t + '}' for t in unknown) + '. Use '
+                        + ', '.join('{' + t + '}' for t in NUMBERING_TOKENS[kind]) + '.')
+    leftover = re.sub(r'\{[^{}]*\}', '', fmt)
+    if '{' in leftover or '}' in leftover:
+        problems.append('A brace is not closed.')
+    try:
+        pad = int(pad)
+        if not 1 <= pad <= 8:
+            raise ValueError
+    except (TypeError, ValueError):
+        problems.append('Digits must be a whole number from 1 to 8.')
+    return problems
+
+
+def render_number(fmt, pad, seq, fy='', fy_start='', year='', ver=0):
+    """Fill a numbering format. Placeholders only -- never str.format, so a
+    stray brace or a colon in the format cannot be read as a format spec."""
+    values = {'fy': fy, 'fy_start': fy_start, 'year': year,
+              'seq': f"{int(seq):0{int(pad)}d}", 'ver': ver}
+    return re.sub(r'\{(\w+)\}',
+                  lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0),
+                  fmt)
+
+
+def _grn_year_str(cursor):
+    """The year part GRN numbers have always used, per the FY card's option."""
     custom_enabled = get_setting('fy_custom_enabled', '0', cursor=cursor)
     grn_format = get_setting('fy_grn_format', 'start_year', cursor=cursor)
     if custom_enabled == '1':
         if grn_format == 'full_range':
-            year_str = get_financial_year(cursor=cursor)
-        else:
-            year_str = get_financial_year_start(cursor=cursor)
-    else:
-        year_str = str(date.today().year)
+            return get_financial_year(cursor=cursor)
+        return get_financial_year_start(cursor=cursor)
+    return str(date.today().year)
 
-    prefix = f"GRN-{year_str}-"
-    cursor.execute(
-        "SELECT grn_no FROM grn WHERE grn_no LIKE %s ORDER BY grn_id DESC LIMIT 1",
-        (f"{prefix}%",)
-    )
-    last = cursor.fetchone()
-    if last and last.get('grn_no'):
-        try:
-            seq = int(last['grn_no'].split('-')[-1]) + 1
-        except (ValueError, IndexError):
-            seq = 1
+
+def grn_numbering(cursor):
+    """The GRN format in force, and what fills its placeholders today."""
+    fmt = get_setting('grn_number_format', DEFAULT_GRN_FORMAT, cursor=cursor) \
+        or DEFAULT_GRN_FORMAT
+    try:
+        pad = int(get_setting('grn_number_pad', DEFAULT_NUMBER_PAD, cursor=cursor))
+    except (TypeError, ValueError):
+        pad = DEFAULT_NUMBER_PAD
+    year_str = _grn_year_str(cursor)
+    fy = get_financial_year(cursor=cursor) or ''
+    ctx = {'fy': fy, 'fy_start': str(fy).split('-')[0], 'year': year_str}
+    try:
+        start = int(get_setting(f'grn_start_{year_str}', 1, cursor=cursor) or 1)
+    except (TypeError, ValueError):
+        start = 1
+    return fmt, pad, ctx, max(1, start), year_str
+
+
+def _like_escape(s):
+    return s.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
+def first_free(start, taken):
+    """The first number at or after `start` that is not already used."""
+    seq = max(1, int(start))
+    while seq in taken:
+        seq += 1
+    return seq
+
+
+def next_in_series(cursor, table, column, fmt, pad, ctx, start,
+                   id_col=None, restart_after=None, with_seq=False):
+    """Next number in the series a format produces, for numbers stored as text.
+
+    The series is whatever the format renders around {seq}.
+
+    HOW THE START NUMBER WORKS
+    Once a start number has been saved in Settings, numbering starts from
+    exactly that number. Everything issued before the save is ignored when
+    deciding what comes next -- old test data, a previous system's numbers,
+    anything. The save records the highest row id at that moment
+    (restart_after), and only rows created after it count.
+
+    The one thing earlier numbers still do is block reuse. A number already in
+    the column is skipped, because the column is UNIQUE and two documents must
+    never share a number. Restart at 12 with 2537-2539 already used and you
+    get 12, 13, 14 ... 2536, then 2540.
+
+    With no start number saved, numbering carries on from the highest used,
+    exactly as it always has.
+    """
+    before, after = fmt.split('{seq}', 1)
+    prefix = render_number(before, pad, 0, **ctx)
+    suffix = render_number(after, pad, 0, **ctx)
+
+    id_sql = f"{id_col} AS id, " if id_col else "NULL AS id, "
+    cursor.execute(f"SELECT {id_sql}{column} AS n FROM {table} WHERE {column} LIKE %s",
+                   (_like_escape(prefix) + '%' + _like_escape(suffix),))
+    taken, best_all, best_since = set(), 0, 0
+    for r in cursor.fetchall():
+        no = r.get('n') or ''
+        core = no[len(prefix):len(no) - len(suffix) if suffix else None]
+        if not core.isdigit():
+            continue
+        s = int(core)
+        taken.add(s)
+        best_all = max(best_all, s)
+        if restart_after is not None and r.get('id') is not None \
+                and int(r['id']) > int(restart_after):
+            best_since = max(best_since, s)
+
+    if restart_after is None:
+        seq = max(best_all + 1, start)
     else:
-        seq = 1
-    return f"{prefix}{seq:04d}"
+        seq = max(best_since + 1, start)
+    seq = first_free(seq, taken)
+
+    candidate = prefix + f"{seq:0{pad}d}" + suffix
+    # The text itself is the UNIQUE key, and a different padding of the same
+    # number is different text, so confirm against the column as well.
+    for _ in range(1000):
+        cursor.execute(f"SELECT 1 FROM {table} WHERE {column} = %s LIMIT 1",
+                       (candidate,))
+        if not cursor.fetchone():
+            break
+        seq = first_free(seq + 1, taken)
+        candidate = prefix + f"{seq:0{pad}d}" + suffix
+    if with_seq:
+        return candidate, seq, best_all, sorted(taken)
+    return candidate
+
+
+def restart_mark(cursor, key):
+    """The row id recorded when a start number was saved, or None."""
+    v = get_setting(key, None, cursor=cursor)
+    try:
+        return int(v) if v not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+
+
+def wo_numbering(cursor):
+    """The work order format in force, and what fills its placeholders."""
+    fmt = get_setting('wo_number_format', DEFAULT_WO_FORMAT, cursor=cursor) \
+        or DEFAULT_WO_FORMAT
+    try:
+        pad = int(get_setting('wo_number_pad', DEFAULT_WO_PAD, cursor=cursor))
+    except (TypeError, ValueError):
+        pad = DEFAULT_WO_PAD
+    fy = get_financial_year(cursor=cursor) or ''
+    ctx = {'fy': fy, 'fy_start': str(fy).split('-')[0],
+           'year': date.today().year}
+    try:
+        start = int(get_setting(f'wo_start_{fy}', DEFAULT_WO_START,
+                                cursor=cursor) or DEFAULT_WO_START)
+    except (TypeError, ValueError):
+        start = DEFAULT_WO_START
+    return fmt, pad, ctx, max(1, start), fy
+
+
+def generate_grn_number(cursor, with_seq=False):
+    """Next GRN number in the series the current format produces.
+
+    The series is whatever the format renders around {seq}. Change the format
+    and the new text matches none of the old numbers, so the count starts
+    again -- from the start number set alongside it, which is how you carry
+    on from where the old series stopped.
+
+    The highest number in the series is taken, not the most recent row, and
+    the result is checked against grn_no's UNIQUE key before it is handed
+    back, so two formats that happen to overlap cannot produce a duplicate.
+    """
+    fmt, pad, ctx, start, year_str = grn_numbering(cursor)
+    return next_in_series(cursor, 'grn', 'grn_no', fmt, pad, ctx, start,
+                          id_col='grn_id',
+                          restart_after=restart_mark(cursor, f'grn_restart_after_{year_str}'),
+                          with_seq=with_seq)
 
 
 def get_bom_from_sheets(sheetnames):
@@ -957,20 +1244,24 @@ def convert_qty(units, qty, from_unit_id, to_unit_id, conversions=None, item_id=
 #   copper wire, in grams  -> BOM quantity is MILLIMETRES, reaching grams
 #                             through that item's own conversion factor.
 #
-# This has now been wrong in both directions, so both are worth recording.
+# This has now been wrong in three ways, so all three are worth recording.
 # First it keyed off 'has a factor', which was right but looked accidental.
 # Then it keyed off 'is a length', which pulled cable in and read 0.25 m as
-# 0.25 mm — a thousand times too little. It is back to the factor, which is
-# what actually distinguishes the two cases: an item whose stock unit cannot
-# measure a BOM line is exactly the item whose BOM line is in millimetres.
+# 0.25 mm. Then it went back to the factor but still named the unit in code,
+# as millimetres — and the factors are grams per METRE, so every wire line
+# came out a thousand times too small: 0.8 on a BOM became 0.023 g of copper
+# instead of 23 g.
 #
-# The weakness is worth naming plainly. This is an assumption in code, not a
-# fact recorded against each line, and it holds only while copper wire is the
-# only item bought by weight and used by length. The day a second such item
-# arrives whose BOM is written in metres, no code change can tell them apart
-# — the line has to say what it means. A `unit_id` column on bom_item does
-# that, and the code below already prefers it whenever it exists.
-BOM_QTY_LENGTH_UNIT = 'mm'
+# No unit is named here any more. A line falls back to the unit the item's
+# own conversion factor is written in, because that factor exists precisely
+# to translate the unit a BOM states into the unit the store holds. Add a
+# factor in metres and the BOM reads metres; add one in grams against a stock
+# unit of litres and the BOM reads grams. Nothing to keep in step.
+#
+# The weakness is still worth naming: this is an assumption, not a fact
+# recorded against each line, and it can only serve an item with ONE factor.
+# A `unit_id` column on bom_item records it properly, and the code below
+# prefers that whenever the column exists.
 
 def unit_id_by_short(units, short):
     """unit_id for a short name, or None if that unit does not exist."""
@@ -996,19 +1287,21 @@ def bom_unit_for(units, conversions, item_id, explicit_unit_id=None, item_unit_i
     if item_id is None or not conversions:
         return None
 
-    mm_id = unit_id_by_short(units, BOM_QTY_LENGTH_UNIT)
-    if not mm_id:
-        return None
-    length_family = unit_base_id(units, mm_id)
-
-    # Only an item carrying a per-item factor against a length unit — copper
-    # wire. Cable is held in metres and measures its own BOM line perfectly
-    # well, so it never reaches here.
+    # The item's own factor says which unit its BOM lines are written in.
+    # Copper wire carries one factor, grams per metre, so its lines are
+    # metres. An item with no factor measures its own BOM line perfectly
+    # well in its stock unit -- cable, sleeve, and everything else -- and
+    # gets None, meaning no conversion at all.
     iid = int(item_id)
-    for (row_item, row_unit) in conversions:
-        if row_item == iid and unit_base_id(units, row_unit) == length_family:
-            return mm_id
+    stated = [row_unit for (row_item, row_unit) in conversions
+              if row_item == iid]
 
+    if len(stated) == 1:
+        return stated[0]
+
+    # Two or more factors and nothing to choose between them. Guessing here
+    # is how a requirement ends up out by a factor of a thousand, so the line
+    # has to say what it means: put a unit on it, in bom_item.unit_id.
     return None
 
 
@@ -1036,9 +1329,11 @@ def has_unit_column(cursor, table):
 def bom_qty_to_stock(units, conversions, item_id, bom_qty, bom_unit_id, item_unit_id):
     """Turns a BOM quantity into the unit the item is actually stocked in.
 
-    A BOM line may state its own unit — copper wire is specified in millimetres
+    A BOM line may state its own unit — copper wire is specified in metres
     while the store holds grams. bom_unit_id NULL means the line is already in
-    the item's own unit, which is the case for every ordinary part.
+    the item's own unit, which is the case for every ordinary part, cable
+    included: cable is bought and used in metres, so its BOM quantity needs no
+    conversion at all.
 
     Returns (value, status). On a status other than success the value is None
     and the caller must leave the requirement alone rather than guess: a
@@ -1449,38 +1744,92 @@ def get_vendor_items(cursor):
 PO_START = {2026: 182}
 
 
-def generate_po_number(cursor):
-    # Find start and end dates of the current financial year
+def po_fy_key(today=None):
+    """The year a PO's financial year starts in -- April to March, as
+    generate_po_number counts it."""
+    today = today or date.today()
+    return today.year if today.month >= 4 else today.year - 1
+
+
+def po_start_for(cursor, fy_key):
+    """Where PO numbering starts this financial year.
+
+    Set on the Settings page and keyed by year, so next April falls back to 1
+    by itself. PO_START above is only the fallback for a year nobody has set,
+    which keeps 2026-27 starting at 0182 as it always has.
+    """
+    try:
+        return max(1, int(get_setting(f'po_start_{fy_key}',
+                                      PO_START.get(fy_key, 1), cursor=cursor)))
+    except (TypeError, ValueError):
+        return PO_START.get(fy_key, 1)
+
+
+def generate_po_number(cursor, with_seq=False):
+    """Next PO number this financial year (April to March).
+
+    Same rule as GRN and work order numbers: once a start number is saved in
+    Settings, numbering starts from exactly it and earlier POs are ignored --
+    except that a number already used this year is skipped, so no two POs in
+    a year share one. po_number has no UNIQUE key to catch that, so this is
+    the only thing that does.
+    """
     today = date.today()
-    if today.month >= 4:
-        fy_start = f"{today.year}-04-01"
-        fy_end = f"{today.year + 1}-03-31"
+    fy_key = po_fy_key(today)
+    fy_start = f"{fy_key}-04-01"
+    fy_end = f"{fy_key + 1}-03-31"
+
+    cursor.execute("""SELECT po_id, po_number FROM purchase_order
+                       WHERE date_raised >= %s AND date_raised <= %s""",
+                   (fy_start, fy_end))
+    rows = cursor.fetchall()
+
+    start = po_start_for(cursor, fy_key)
+    mark = restart_mark(cursor, f'po_restart_after_{fy_key}')
+
+    taken, best_all, best_since = set(), 0, 0
+    for r in rows:
+        if r.get('po_number') is None:
+            continue
+        n = int(r['po_number'])
+        taken.add(n)
+        best_all = max(best_all, n)
+        if mark is not None and int(r['po_id']) > mark:
+            best_since = max(best_since, n)
+
+    if mark is None:
+        seq = max(best_all + 1, start)
     else:
-        fy_start = f"{today.year - 1}-04-01"
-        fy_end = f"{today.year}-03-31"
-        
-    cursor.execute("""
-        SELECT MAX(po_number) as max_po 
-        FROM purchase_order 
-        WHERE date_raised >= %s AND date_raised <= %s
-    """, (fy_start, fy_end))
-    row = cursor.fetchone()
-
-    start = PO_START.get(today.year if today.month >= 4 else today.year - 1, 1)
-    if row and row['max_po'] is not None:
-        return max(row['max_po'] + 1, start)
-    return start
+        seq = max(best_since + 1, start)
+    seq = first_free(seq, taken)
+    if with_seq:
+        return seq, best_all, sorted(taken)
+    return seq
 
 # ─── DASHBOARD ──────────────────────────────────────────
 # ─── DASHBOARD ──────────────────────────────────────────
+def greeting_for(hour):
+    """5:00-11:59 morning, 12:00-16:59 afternoon, 17:00-4:59 evening."""
+    if 5 <= hour < 12:
+        return 'Good morning'
+    if 12 <= hour < 17:
+        return 'Good afternoon'
+    return 'Good evening'
+
+
+ROLE_LABELS = {'admin': 'Administrator', 'staff': 'Staff', 'approver': 'Approver'}
+
+
 @app.route('/')
 def dashboard():
     db = get_db()
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT COUNT(*) as cnt FROM work_order WHERE status = 0")
+    # Work orders are Open, Closed or Cancelled now; the retired 1/2/5 codes
+    # count as Open, the same way the work order list reads them.
+    cursor.execute(f"SELECT COUNT(*) as cnt FROM work_order wo WHERE {WO_STATUS_NORMALISED} = %s", (WO_OPEN,))
     wo_open = cursor.fetchone()['cnt']
-    cursor.execute("SELECT COUNT(*) as cnt FROM work_order WHERE status = 1")
-    wo_inprogress = cursor.fetchone()['cnt']
+    cursor.execute(f"SELECT COUNT(*) as cnt FROM work_order wo WHERE {WO_STATUS_NORMALISED} = %s", (WO_CLOSED,))
+    wo_closed = cursor.fetchone()['cnt']
     cursor.execute("SELECT COUNT(*) as cnt FROM grn")
     grn_total = cursor.fetchone()['cnt']
     cursor.execute("SELECT COUNT(*) as cnt FROM purchase_order")
@@ -1584,7 +1933,11 @@ def dashboard():
     db.close()
     return render_template('dashboard.html',
         wo_open=wo_open,
-        wo_inprogress=wo_inprogress,
+        wo_closed=wo_closed,
+        greeting=greeting_for(datetime.now().hour),
+        now=datetime.now(),
+        role_label=ROLE_LABELS.get((session.get('role') or '').lower(),
+                                   (session.get('role') or 'Staff').title()),
         grn_total=grn_total,
         grn_qc_pending=grn_qc_pending,
         po_total=po_total,
@@ -1924,7 +2277,7 @@ def purchase_order_add():
             if not item_id:
                 continue
             qty = float(qty_ordered_list[i] or 0)
-            price = float(unit_price_list[i] or 0)
+            price = round(float(unit_price_list[i] or 0), PRICE_DP)
             unit_id = int(unit_id_list[i])
             
             # None when the item has no HSN and none was picked. The line is
@@ -1936,6 +2289,10 @@ def purchase_order_add():
                              (po_id, item_id, hsn_id, qty_ordered, unit_price, unit_id, status)
                              VALUES (%s, %s, %s, %s, %s, %s, 0)""",
                            (po_id, item_id, line_hsn_id, qty, price, unit_id))
+
+        # Ordered quantities have just been rewritten, so whether each
+        # line is complete may have changed even though no receipt did.
+        refresh_po_status(cursor, po_id)
 
         db.commit()
         cursor.close()
@@ -2329,13 +2686,22 @@ def purchase_order_edit(po_id):
     # We do NOT update the DB status to 'Draft' on GET, we just override it locally 
     # so the edit page selects 'Draft'. The actual database status remains 'Approved' 
     # until they save the form (POST).
-    is_previously_approved = (po['po_status'] == 'Approved')
+    is_previously_approved = (po['po_status'] in
+                              ('Approved', 'Partially Received', 'Received'))
 
     if request.method == 'POST':
         vendor_id = request.form['vendor_id']
         date_raised = request.form.get('date_raised') or None
         remarks = request.form.get('remarks') or None
         po_status = request.form.get('po_status') or 'Draft'
+        # A PO that has already taken delivery must not be dragged
+        # backwards by an amendment. How much has arrived is a reading of
+        # the GRNs, not something this form decides, so the stored value
+        # wins -- except for cancelling or short-closing, which are
+        # deliberate acts.
+        if ((po.get('po_status') or '') in ('Partially Received', 'Received')
+                and po_status not in ('Cancelled', SHORT_CLOSED_STATUS)):
+            po_status = po['po_status']
         
         reviewed_date = request.form.get('reviewed_date') or None
         reviewed_by = request.form.get('reviewed_by') or None
@@ -2406,7 +2772,7 @@ def purchase_order_edit(po_id):
             if not item_id:
                 continue
             qty = float(qty_ordered_list[i] or 0)
-            price = float(unit_price_list[i] or 0)
+            price = round(float(unit_price_list[i] or 0), PRICE_DP)
             unit_id = int(unit_id_list[i])
             
             # None when the item has no HSN and none was picked. The line is
@@ -2418,6 +2784,10 @@ def purchase_order_edit(po_id):
                              (po_id, item_id, hsn_id, qty_ordered, unit_price, unit_id, status)
                              VALUES (%s, %s, %s, %s, %s, %s, 0)""",
                            (po_id, item_id, line_hsn_id, qty, price, unit_id))
+
+        # Ordered quantities have just been rewritten, so whether each
+        # line is complete may have changed even though no receipt did.
+        refresh_po_status(cursor, po_id)
 
         db.commit()
         cursor.close()
@@ -2839,7 +3209,7 @@ def work_order_list():
         query += " AND (wo.wo_number LIKE %s OR wo.description LIKE %s OR b.bom_code LIKE %s)"
         params += [f'%{search}%', f'%{search}%', f'%{search}%']
     if status_filter != '':
-        query += " AND wo.status = %s"
+        query += f" AND {WO_STATUS_NORMALISED} = %s"
         params.append(status_filter)
 
     query += " ORDER BY wo.wo_id DESC"
@@ -2866,7 +3236,8 @@ def work_order_list():
                            search=search,
                            status_filter=status_filter,
                            pending_only=pending_only,
-                           status_map=STATUS_MAP)
+                           status_map=STATUS_MAP,
+                           status_choices=WO_FILTER_CHOICES)
 
 # ─── WORK ORDER ADD ─────────────────────────────────────
 @app.route('/work-order/add', methods=['GET', 'POST'])
@@ -2999,6 +3370,13 @@ def work_order_add():
 def work_order_detail(wo_id):
     db = get_db()
     cursor = db.cursor(dictionary=True)
+
+    # Lines can be added, removed or re-calculated from half a dozen places.
+    # Rather than remember to re-read the status in each of them, it is read
+    # here, where somebody is looking at the work order anyway. It also brings
+    # a row still holding a legacy 'In Progress' or 'Active' into line.
+    refresh_wo_status(cursor, wo_id)
+    db.commit()
 
     cursor.execute("""SELECT wo.*, b.bom_code, b.description as bom_desc, b.bom_id
                      FROM work_order wo
@@ -3372,28 +3750,48 @@ def work_order_edit(wo_id):
     cursor = db.cursor(dictionary=True)
     if request.method == 'POST':
         description = request.form['description']
-        status = request.form['status']
         remarks = request.form['remarks']
         cancelled_by = request.form.get('cancelled_by', '')
         qty_to_build = request.form['qty_to_build']
 
-        # Get current bom_id before update
-        cursor.execute("SELECT bom_id FROM work_order WHERE wo_id = %s", (wo_id,))
+        # Get current bom_id and status before update
+        cursor.execute("SELECT bom_id, status FROM work_order WHERE wo_id = %s", (wo_id,))
         wo_old = cursor.fetchone()
         bom_id = wo_old['bom_id'] if wo_old else None
+        was = int((wo_old or {}).get('status') or 0)
 
-        if int(status) == 4 and cancelled_by:
+        # Open and Closed are not the form's to set -- they are read off what
+        # has been issued, by refresh_wo_status below. Cancelling is the one
+        # state nothing else records, so it stays a decision somebody makes,
+        # and un-cancelling just hands the work order back to that reading.
+        try:
+            wanted = int(request.form.get('status', was))
+        except (TypeError, ValueError):
+            wanted = was
+
+        if wanted == WO_CANCELLED and was != WO_CANCELLED:
             cursor.execute("""UPDATE work_order SET description=%s, status=%s,
                              remarks=%s, cancelled_by=%s, cancelled_at=NOW(), qty_to_build=%s
                              WHERE wo_id=%s""",
-                           (description, status, remarks, cancelled_by, qty_to_build, wo_id))
-        else:
+                           (description, WO_CANCELLED, remarks,
+                            cancelled_by or session.get('username') or '',
+                            qty_to_build, wo_id))
+        elif wanted != WO_CANCELLED and was == WO_CANCELLED:
             cursor.execute("""UPDATE work_order SET description=%s, status=%s,
+                             remarks=%s, cancelled_by=NULL, cancelled_at=NULL,
+                             qty_to_build=%s WHERE wo_id=%s""",
+                           (description, WO_OPEN, remarks, qty_to_build, wo_id))
+        else:
+            cursor.execute("""UPDATE work_order SET description=%s,
                              remarks=%s, qty_to_build=%s WHERE wo_id=%s""",
-                           (description, status, remarks, qty_to_build, wo_id))
+                           (description, remarks, qty_to_build, wo_id))
 
         # Recalculate requirements based on the new number of sets
         calculate_requirements_from_bom(cursor, wo_id, bom_id, qty_to_build)
+
+        # Building more sets raises every requirement, so a work order that
+        # read Closed a moment ago may be Open again.
+        refresh_wo_status(cursor, wo_id)
 
         db.commit()
         cursor.close()
@@ -3406,7 +3804,9 @@ def work_order_edit(wo_id):
     wo = cursor.fetchone()
     cursor.close()
     db.close()
-    return render_template('work_order_edit.html', wo=wo, status_map=STATUS_MAP)
+    return render_template('work_order_edit.html', wo=wo, status_map=STATUS_MAP,
+                           status_choices=WO_STATUS_CHOICES,
+                           WO_CANCELLED=WO_CANCELLED)
 
 # ─── STOCK BLOCK ADD ────────────────────────────────────
 @app.route('/work-order/<int:wo_id>/block', methods=['POST'])
@@ -3559,6 +3959,9 @@ def issue_stock(wo_id):
                      WHERE wo_id=%s AND item_id=%s""",
                    (qty_to_issue, wo_id, item_id))
 
+    # Issuing the last of the material is what closes a work order.
+    refresh_wo_status(cursor, wo_id)
+
     db.commit()
     cursor.close()
     db.close()
@@ -3675,16 +4078,61 @@ def grn_list():
         grn_type = g.get('grn_type')
         if grn_type == 0:  # Purchase GRN
             po_id = g.get('po_id')
-            total_ordered = 0
+
+            # THIS USED TO ADD UP UNLIKE THINGS AND COMPARE THE TOTALS.
+            #
+            #   total_ordered  = SUM(qty_ordered)  -- in each ORDER line's unit
+            #   total_received = SUM(qty_received) -- in each ITEM's stock unit
+            #
+            # Two sums over different items in different units. An order for
+            # 2 kg of wire and 10 pieces summed to 12, while the receipt of
+            # 2000 g and 10 pcs summed to 2010, so the GRN read 'Received all'
+            # the moment anything at all arrived. With the wire items moved to
+            # grams, every wire order did this.
+            #
+            # Now each line is compared against its own order line, with the
+            # ordered quantity converted into the unit the item is stocked in
+            # first -- the same rule the receipt cap and refresh_po_status use.
+            lines_short = False
+            lines_checked = 0
             if po_id:
-                cursor.execute("SELECT SUM(qty_ordered) AS total_ord FROM po_items WHERE po_id = %s", (po_id,))
-                res = cursor.fetchone()
-                if res and res['total_ord']:
-                    total_ordered = float(res['total_ord'])
-            
-            total_received = sum(float(it['qty_received'] or 0) for it in grn_items)
-            
-            if total_ordered > 0 and total_received < total_ordered:
+                cursor.execute("""SELECT poi.item_id, poi.qty_ordered,
+                                         poi.unit_id AS po_unit_id,
+                                         i.unit_id   AS item_unit_id
+                                    FROM po_items poi
+                                    JOIN items i ON i.item_id = poi.item_id
+                                   WHERE poi.po_id = %s""", (po_id,))
+                po_lines = cursor.fetchall()
+
+                cursor.execute("""SELECT gi.item_id,
+                                         COALESCE(SUM(gi.qty_received), 0) AS received
+                                    FROM grn_item gi
+                                    JOIN grn g2 ON g2.grn_id = gi.grn_id
+                                   WHERE g2.po_id = %s
+                                   GROUP BY gi.item_id""", (po_id,))
+                received_by_item = {int(r['item_id']): float(r['received'] or 0)
+                                    for r in cursor.fetchall()}
+
+                list_units = load_unit_map(cursor)
+                list_convs = load_item_conversions(
+                    cursor, [l['item_id'] for l in po_lines])
+
+                for l in po_lines:
+                    ordered_conv, conv = convert_qty(
+                        list_units, float(l['qty_ordered'] or 0),
+                        l['po_unit_id'], l['item_unit_id'],
+                        list_convs, l['item_id'])
+                    if conv not in ('same', 'converted', 'item_factor'):
+                        # Units that do not relate cannot be compared, so this
+                        # line is not evidence either way.
+                        continue
+                    lines_checked += 1
+                    got = received_by_item.get(int(l['item_id']), 0.0)
+                    if round(got, QTY_DP) + 1e-9 < round(ordered_conv, QTY_DP):
+                        lines_short = True
+                        break
+
+            if lines_checked and lines_short:
                 g['grn_status'] = 'Partially received'
                 g['status_badge'] = 'badge-inprogress'
             else:
@@ -3909,7 +4357,7 @@ def grn_add_purchase():
 
         cursor.execute("""
             INSERT INTO grn (grn_no, grn_type, po_id, received_date, received_by, invoice_no, invoice_date, vendor_id, remarks, status, created_at)
-            VALUES (%s, 0, %s, %s, %s, %s, %s, %s, %s, 'Received all', NOW())
+            VALUES (%s, 0, %s, %s, %s, %s, %s, %s, %s, 'Received', NOW())
         """, (grn_no, po_id, received_date, received_by, invoice_no, invoice_date, vendor_id, remarks))
         
         grn_id = cursor.lastrowid
@@ -3929,6 +4377,9 @@ def grn_add_purchase():
             # Where it is being put. Recorded on the line now; storage only
             # moves once QC accepts, because rejected goods are never put away.
             set_grn_item_location(cursor, new_line_id, loc)
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -3994,6 +4445,9 @@ def grn_add_internal_return():
             # it would only push the stock somewhere untracked.
             set_grn_item_location(cursor, new_line_id,
                                   line_locations[i] if i < len(line_locations) else '')
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4065,6 +4519,9 @@ def grn_add_wo_return():
             # it would only push the stock somewhere untracked.
             set_grn_item_location(cursor, new_line_id,
                                   line_locations[i] if i < len(line_locations) else '')
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4142,6 +4599,9 @@ def grn_add_work_order_return():
             stamp_grn_item_unit(cursor, new_line_id, item_id)
             set_grn_item_location(cursor, new_line_id,
                                   request.form.get('location', ''))
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4229,7 +4689,7 @@ def grn_add_online_purchase():
 
         cursor.execute("""
             INSERT INTO grn (grn_no, grn_type, po_number, po_id, received_date, received_by, invoice_no, invoice_date, vendor_id, remarks, status, created_at)
-            VALUES (%s, 3, %s, %s, %s, %s, %s, %s, %s, %s, 'Received all', NOW())
+            VALUES (%s, 3, %s, %s, %s, %s, %s, %s, %s, %s, 'Received', NOW())
         """, (grn_no, po_number, po_id, received_date, received_by, invoice_no, invoice_date, vendor_id, remarks))
         
         grn_id = cursor.lastrowid
@@ -4255,6 +4715,9 @@ def grn_add_online_purchase():
             # it would only push the stock somewhere untracked.
             set_grn_item_location(cursor, new_line_id,
                                   line_locations[i] if i < len(line_locations) else '')
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4300,9 +4763,18 @@ def grn_edit_po(grn_id):
         if res:
             po_id = res['po_id']
 
+    # Both POs change: the one losing the receipt and the one gaining it.
+    cursor.execute("SELECT po_id FROM grn WHERE grn_id = %s", (grn_id,))
+    _was = cursor.fetchone()
+    previous_po_id = _was['po_id'] if _was else None
+
     cursor.execute("""
         UPDATE grn SET po_number = %s, po_id = %s WHERE grn_id = %s
     """, (po_number, po_id, grn_id))
+
+    if previous_po_id and previous_po_id != po_id:
+        refresh_po_status(cursor, previous_po_id)
+    refresh_po_status(cursor, po_id)
     db.commit()
     cursor.close()
     db.close()
@@ -4328,7 +4800,7 @@ def grn_add_any_type():
 
         cursor.execute("""
             INSERT INTO grn (grn_no, grn_type, received_date, received_by, invoice_no, invoice_date, vendor_id, remarks, status, created_at)
-            VALUES (%s, 4, %s, %s, %s, %s, %s, %s, 'Received all', NOW())
+            VALUES (%s, 4, %s, %s, %s, %s, %s, %s, 'Received', NOW())
         """, (grn_no, received_date, received_by, invoice_no, invoice_date, vendor_id, remarks))
         
         grn_id = cursor.lastrowid
@@ -4354,6 +4826,9 @@ def grn_add_any_type():
             # it would only push the stock somewhere untracked.
             set_grn_item_location(cursor, new_line_id,
                                   line_locations[i] if i < len(line_locations) else '')
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4409,7 +4884,7 @@ def grn_convert(grn_id):
         cursor.execute("""
             UPDATE grn 
             SET grn_type = %s, vendor_id = %s, invoice_no = %s, invoice_date = %s,
-                wo_id = %s, po_number = %s, po_id = %s, remarks = %s, status = 'Received all'
+                wo_id = %s, po_number = %s, po_id = %s, remarks = %s, status = 'Received'
             WHERE grn_id = %s
         """, (target_type, vendor_id, invoice_no, invoice_date, wo_id, po_number, po_id, remarks, grn_id))
 
@@ -4437,6 +4912,9 @@ def grn_convert(grn_id):
             # it would only push the stock somewhere untracked.
             set_grn_item_location(cursor, new_line_id,
                                   line_locations[i] if i < len(line_locations) else '')
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4535,7 +5013,7 @@ def grn_add_other():
 
         cursor.execute("""
             INSERT INTO grn (grn_no, grn_type, received_date, received_by, invoice_no, invoice_date, vendor_id, wo_id, remarks, status, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Received all', NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Received', NOW())
         """, (grn_no, grn_type_int, received_date, received_by, invoice_no, invoice_date, vendor_id, wo_id_ref, remarks))
         
         grn_id = cursor.lastrowid
@@ -4561,6 +5039,9 @@ def grn_add_other():
             # it would only push the stock somewhere untracked.
             set_grn_item_location(cursor, new_line_id,
                                   line_locations[i] if i < len(line_locations) else '')
+
+        # What has arrived is now part of what the PO reads as its status.
+        refresh_po_status_for_grn(cursor, grn_id)
 
         db.commit()
         cursor.close()
@@ -4831,6 +5312,171 @@ def grn_detail(grn_id):
                            wo_ref=wo_ref, po_ref=po_ref)
 
 # ─── GRN QC INSPECTION ──────────────────────────────────
+# ─── PO STATUS, KEPT IN STEP WITH WHAT HAS ARRIVED ──────────────────
+#
+# po_status used to stop at 'Approved' and stay there, and po_items.status was
+# written once at insert and never again, so every line read 0 (pending) even
+# after it had been received, inspected and put away.
+#
+# Both are now a reading of the GRNs rather than a field anybody types, and
+# are recomputed after every receipt and every inspection.
+#
+# Only a PO already in one of these three states is touched. Draft, Reviewed,
+# Cancelled, Short Closed and Closed are decisions somebody made and are left
+# exactly as they are.
+_PO_AUTO_STATUSES = ('Approved', 'Partially Received', 'Received')
+
+
+def refresh_po_status(cursor, po_id):
+    """Recompute po_items.status and po_status from the GRNs against this PO.
+
+    Returns the status written, or None if the PO was left alone.
+    """
+    if not po_id:
+        return None
+    cursor.execute("SELECT po_id, po_status FROM purchase_order WHERE po_id = %s",
+                   (po_id,))
+    po = cursor.fetchone()
+    if not po or (po.get('po_status') or '') not in _PO_AUTO_STATUSES:
+        return None
+
+    cursor.execute("""SELECT poi.po_item_id, poi.item_id, poi.qty_ordered,
+                             poi.status, poi.unit_id AS po_unit_id,
+                             i.unit_id AS item_unit_id
+                        FROM po_items poi
+                        JOIN items i ON i.item_id = poi.item_id
+                       WHERE poi.po_id = %s""", (po_id,))
+    lines = cursor.fetchall()
+    if not lines:
+        return None
+
+    # Rolled up across every GRN on this PO: a line can be received in
+    # several deliveries and inspected in several passes.
+    cursor.execute("""SELECT gi.item_id,
+                             COALESCE(SUM(gi.qty_received), 0) AS received,
+                             COALESCE(SUM(gi.qty_accepted), 0) AS accepted,
+                             COALESCE(SUM(gi.qty_rejected), 0) AS rejected
+                        FROM grn_item gi
+                        JOIN grn g ON g.grn_id = gi.grn_id
+                       WHERE g.po_id = %s
+                       GROUP BY gi.item_id""", (po_id,))
+    got = {int(r['item_id']): r for r in cursor.fetchall()}
+
+    units = load_unit_map(cursor)
+    conversions = load_item_conversions(cursor, [l['item_id'] for l in lines])
+
+    any_movement, all_complete = False, True
+
+    for l in lines:
+        if int(l.get('status') or 0) == 3:
+            continue                      # cancelled by hand; not ours to move
+
+        r = got.get(int(l['item_id'])) or {}
+        accepted = float(r.get('accepted') or 0)
+        received = float(r.get('received') or 0)
+        rejected = float(r.get('rejected') or 0)
+        # Received but neither passed nor failed yet. It may still turn out
+        # good, so it counts as movement but never as fulfilment.
+        awaiting = max(0.0, received - accepted - rejected)
+
+        # The order is in the ORDER's unit and the GRN figures are in the
+        # ITEM's unit, so the ordered quantity is converted FIRST. Comparing
+        # them raw would measure grams against kilograms.
+        ordered_conv, conv = convert_qty(units, float(l['qty_ordered'] or 0),
+                                         l['po_unit_id'], l['item_unit_id'],
+                                         conversions, l['item_id'])
+        comparable = conv in ('same', 'converted', 'item_factor')
+
+        if accepted > 0 or awaiting > 0:
+            any_movement = True
+
+        if not comparable:
+            # No honest way to call this line complete, so it goes as far as
+            # partial and no further -- the same rule the receipt cap uses.
+            line_status = 1 if (accepted > 0 or awaiting > 0) else 0
+        elif accepted + 1e-9 >= round(ordered_conv, QTY_DP):
+            line_status = 2
+        elif accepted > 0 or awaiting > 0:
+            line_status = 1
+        else:
+            line_status = 0
+
+        if line_status != 2:
+            all_complete = False
+
+        if line_status != int(l.get('status') or 0):
+            cursor.execute("UPDATE po_items SET status = %s WHERE po_item_id = %s",
+                           (line_status, l['po_item_id']))
+
+    if all_complete:
+        status = 'Received'
+    elif any_movement:
+        status = 'Partially Received'
+    else:
+        status = 'Approved'
+
+    if status != (po.get('po_status') or ''):
+        cursor.execute("UPDATE purchase_order SET po_status = %s WHERE po_id = %s",
+                       (status, po_id))
+    return status
+
+
+def refresh_wo_status(cursor, wo_id):
+    """Open or Closed, read off what has been issued. Cancelled is left alone.
+
+    Closed means every line that is still on the work order has had at least
+    its required quantity issued, net of anything returned. A line whose
+    requirement could not be worked out -- units that do not relate -- leaves
+    the work order Open, because nothing can say it is satisfied.
+    """
+    if not wo_id:
+        return None
+    cursor.execute("SELECT wo_id, status FROM work_order WHERE wo_id = %s", (wo_id,))
+    wo = cursor.fetchone()
+    if not wo:
+        return None
+
+    current = int(wo['status'] or 0)
+    if current == WO_CANCELLED:
+        # Somebody called this off. Issuing against it afterwards does not
+        # quietly bring it back; that takes the Edit screen.
+        return WO_CANCELLED
+
+    cursor.execute("""SELECT qty_required, qty_issued, qty_returned
+                        FROM work_order_item
+                       WHERE wo_id = %s AND COALESCE(is_removed, 0) = 0""", (wo_id,))
+    lines = cursor.fetchall()
+
+    status = WO_OPEN
+    if lines:
+        done = True
+        for l in lines:
+            req = l['qty_required']
+            if req is None:
+                done = False
+                break
+            net = float(l['qty_issued'] or 0) - float(l['qty_returned'] or 0)
+            if net + 1e-9 < float(req):
+                done = False
+                break
+        if done:
+            status = WO_CLOSED
+
+    if status != current:
+        cursor.execute("UPDATE work_order SET status = %s WHERE wo_id = %s",
+                       (status, wo_id))
+    return status
+
+
+def refresh_po_status_for_grn(cursor, grn_id):
+    """The same, for whichever PO the GRN currently points at."""
+    if not grn_id:
+        return None
+    cursor.execute("SELECT po_id FROM grn WHERE grn_id = %s", (grn_id,))
+    row = cursor.fetchone()
+    return refresh_po_status(cursor, row['po_id'] if row else None)
+
+
 def _qc_would_exceed_order(cursor, grn_id, grn_item_ids, qty_accepted):
     """Message describing the first line that would push a PO over, else None.
 
@@ -4977,6 +5623,59 @@ def grn_qc(grn_id):
                         status = 'Pending'
                 
                 delta = q_acc - prev_posted
+
+                # A REJECTION THAT ARRIVES AFTER THE GOODS WENT OUT
+                #
+                # Lowering an accepted quantity posts a negative delta. If the
+                # store has already issued the material, there is nothing left
+                # to take back and physical_availability would go below zero
+                # -- silently, because unlike the issue path this one had no
+                # floor check.
+                #
+                # Negative stock is worse than a refusal: it blocks nothing,
+                # warns nobody, and every later figure built on it is wrong.
+                # So the post is refused and says plainly what is in the way.
+                if delta < 0:
+                    cursor.execute(
+                        "SELECT COALESCE(SUM(physical_availability), 0) AS have "
+                        "FROM storage WHERE item_id = %s", (item_id,))
+                    have = float((cursor.fetchone() or {}).get('have') or 0)
+                    if have + delta < -1e-9:
+                        cursor.execute(
+                            "SELECT COALESCE(SUM(qty_issued), 0) AS gone "
+                            "FROM issue_transaction WHERE item_id = %s", (item_id,))
+                        gone = float((cursor.fetchone() or {}).get('gone') or 0)
+
+                        cursor.execute("""SELECT w.wo_number,
+                                                 SUM(t.qty_issued) AS qty
+                                            FROM issue_transaction t
+                                            LEFT JOIN work_order w ON w.wo_id = t.wo_id
+                                           WHERE t.item_id = %s
+                                           GROUP BY w.wo_number
+                                           ORDER BY qty DESC LIMIT 3""", (item_id,))
+                        where = ', '.join(
+                            f"{r['wo_number'] or 'no work order'} "
+                            f"({_trim_number(r['qty'])})"
+                            for r in cursor.fetchall())
+
+                        cursor.execute("SELECT item_code FROM items WHERE item_id = %s",
+                                       (item_id,))
+                        code = (cursor.fetchone() or {}).get('item_code') or 'This item'
+
+                        db.rollback()
+                        cursor.close()
+                        db.close()
+                        flash(
+                            f"{code}: cannot reduce the accepted quantity by "
+                            f"{_trim_number(-delta)}. Only {_trim_number(have)} is "
+                            f"left in the store — {_trim_number(gone)} has already "
+                            f"been issued out"
+                            + (f" to {where}" if where else "")
+                            + f". Stock would go to {_trim_number(have + delta)}. "
+                            f"Correct the stock in Storage first, or reject less.",
+                            'error')
+                        return redirect(url_for('grn_qc', grn_id=grn_id))
+
                 if delta != 0:
                     s_row = None
                     if loc:
@@ -5032,6 +5731,10 @@ def grn_qc(grn_id):
             WHERE grn_id = %s
         """, (qc_overall_status, inspected_by, inspection_date, grn_id))
         
+        # Acceptance is what fulfils a PO line, so this is the call
+        # that moves a PO to Partially Received and then to Received.
+        refresh_po_status_for_grn(cursor, grn_id)
+
         db.commit()
         cursor.close()
         db.close()
@@ -5217,6 +5920,16 @@ UNIT_ALIASES = {
     'kgs': 'kg', 'kg': 'kg', 'kilogram': 'kg', 'kilograms': 'kg',
     'g': 'g', 'gm': 'g', 'gms': 'g', 'gram': 'g', 'grams': 'g',
     'cm': 'cm', 'cms': 'cm',
+    # Spelled-out length and volume. Without these, a file saying 'millimeter'
+    # or 'litre' does not match the short name, so _resolve_unit CREATES a new
+    # unit for it -- with base_unit_id NULL, which can never convert into
+    # anything. One misspelling and the item is stranded.
+    'mm': 'mm', 'mms': 'mm', 'millimeter': 'mm', 'millimeters': 'mm',
+    'millimetre': 'mm', 'millimetres': 'mm',
+    'l': 'ltr', 'lt': 'ltr', 'ltr': 'ltr', 'ltrs': 'ltr', 'litre': 'ltr',
+    'litres': 'ltr', 'liter': 'ltr', 'liters': 'ltr',
+    'ml': 'ml', 'mls': 'ml', 'millilitre': 'ml', 'millilitres': 'ml',
+    'milliliter': 'ml', 'milliliters': 'ml',
 }
 
 
@@ -5669,7 +6382,7 @@ def preview_inventory_import(cursor, rows):
     # What the file would OVERWRITE on items that already exist. Worth seeing
     # before committing: these replace a value somebody may have corrected by
     # hand, and there is no undo short of the backup.
-    desc_overwrites, mfr_overwrites = [], []
+    desc_overwrites, mfr_overwrites, mpn_overwrites = [], [], []
     for r in rows:
         existing = existing_items.get(r['item_code'])
         if existing:
@@ -5678,6 +6391,13 @@ def preview_inventory_import(cursor, rows):
             if file_desc and old_desc and _norm_space(file_desc) != _norm_space(old_desc):
                 desc_overwrites.append({'item_code': r['item_code'],
                                         'was': old_desc, 'now': file_desc})
+            # Same warning for MPN, now that the file wins there too. Only
+            # counted when there is an existing value to lose.
+            file_mpn = (r['mpn'] or '').strip()[:100]
+            old_mpn = (existing.get('mpn') or '').strip()
+            if file_mpn and old_mpn and _norm_space(file_mpn) != _norm_space(old_mpn):
+                mpn_overwrites.append({'item_code': r['item_code'],
+                                       'was': old_mpn, 'now': file_mpn})
             if r['manufacturer_name'] and existing.get('mfr_id'):
                 file_mfr_id = mfr_id_by_name.get(r['manufacturer_name'].strip().lower())
                 if file_mfr_id and file_mfr_id != existing['mfr_id']:
@@ -5744,6 +6464,7 @@ def preview_inventory_import(cursor, rows):
         'rows_with_qty': sum(1 for r in rows if r['qty'] > 0),
         'desc_overwrites': desc_overwrites,
         'mfr_overwrites': mfr_overwrites,
+        'mpn_overwrites': mpn_overwrites,
     }
 
 
@@ -5764,7 +6485,7 @@ def apply_inventory_import(cursor, rows, default_location='Main Store',
     hsn_by_code, hsn_by_source = hsn_lookup(cursor)
     hsn_linked, hsn_rechanged, hsn_unresolved = 0, [], {}
     created_mfrs, created_units, created_items = [], [], []
-    desc_changed, mfr_changed = [], []
+    desc_changed, mfr_changed, mpn_changed = [], [], []
     items_updated = 0
     storage_rows_created = 0
 
@@ -5806,12 +6527,24 @@ def apply_inventory_import(cursor, rows, default_location='Main Store',
                     mfr_changed.append({'item_code': r['item_code'],
                                         'now': (mfr_name or '').strip()})
 
-            # MPN and UNIT stay gap-fill. Unit especially: the twenty-one
-            # copper wire items were moved to grams by hand and the file still
-            # calls them kilograms, metres and pieces. Letting the file win
-            # would undo that on every import, and silently.
-            if mpn and not (item.get('mpn') or '').strip():
-                sets.append("mpn = %s"); params.append(mpn[:100])
+            # MPN follows the file, exactly as DESCRIPTION does. The store
+            # corrects part numbers in the spreadsheet and expects the
+            # correction to arrive, so a newer value replaces the old one.
+            #
+            # A BLANK cell still never blanks the master, and a value that
+            # only differs in spacing is not a change.
+            #
+            # UNIT stays gap-fill. The twenty-one copper wire items were moved
+            # to grams by hand and the file still calls them kilograms, metres
+            # and pieces. Letting the file win would undo that on every
+            # import, and silently.
+            new_mpn = (mpn or '').strip()[:100]
+            old_mpn = (item.get('mpn') or '').strip()
+            if new_mpn and _norm_space(new_mpn) != _norm_space(old_mpn):
+                sets.append("mpn = %s"); params.append(new_mpn)
+                if old_mpn:
+                    mpn_changed.append({'item_code': r['item_code'],
+                                        'was': old_mpn, 'now': new_mpn})
             if unit_id and not item.get('unit_id'):
                 sets.append("unit_id = %s"); params.append(unit_id)
 
@@ -5888,6 +6621,7 @@ def apply_inventory_import(cursor, rows, default_location='Main Store',
         'storage_rows_created': storage_rows_created,
         'manufacturers_rejected': sorted(rejected),
         'desc_changed': desc_changed,
+        'mpn_changed': mpn_changed,
         'mfr_changed': mfr_changed,
         'hsn_linked': hsn_linked,
         'hsn_changed': hsn_rechanged,
@@ -6210,12 +6944,21 @@ def apply_vendor_import(cursor, rows):
 #  Paste this block into app.py anywhere after apply_vendor_import.
 # ═══════════════════════════════════════════════════════════
 
-# A GSTIN is 15 characters: 2 state digits, a 10-character PAN, one entity
-# digit, the letter Z, and one check character. The import does not test this
-# and five vendors came in malformed -- two missing the state code, two with a
-# 9-character PAN, one with a trailing full stop. A person typing one in is
-# the right place to catch it.
-GSTIN_RE = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$')
+# GST numbers are deliberately NOT checked for shape or length here. The
+# registrations actually in use are not all the textbook 15 characters, and
+# some vendors are unregistered and have none at all, so whatever is typed is
+# stored as typed and a blank is a legitimate answer.
+#
+# The one limit that remains is physical: the column. A value longer than
+# vendor.gst_no can hold is refused with a message, because the alternative
+# is _insert_with_defaults quietly cutting it short and nobody noticing
+# until an invoice is printed with half a GST number on it.
+def _gst_column_limit(cursor):
+    """How many characters vendor.gst_no can hold, or None if it has no limit."""
+    for c in get_table_columns(cursor, 'vendor'):
+        if c['COLUMN_NAME'] == 'gst_no':
+            return c.get('CHARACTER_MAXIMUM_LENGTH')
+    return None
 
 # Shown in the order a person would fill them in. Only the ones the table
 # actually has are used: the address has been through two shapes, so the
@@ -6278,13 +7021,13 @@ def _validate_vendor(cursor, rec, vendor_id=None):
         problems.append("A vendor needs a short name.")
 
     gst = rec.get('gst_no')
-    if gst and not GSTIN_RE.match(gst):
-        why = f"{len(gst)} characters" if len(gst) != 15 else "the wrong shape"
-        problems.append(
-            f"'{gst}' is not a GST number — it is {why}. A GSTIN is 15: two "
-            f"state digits, a 10-character PAN, one entity character, Z, then "
-            f"one check character, like 29AAPCS7981Q1ZW. Leave it blank if the "
-            f"vendor has none.")
+    if gst:
+        limit = _gst_column_limit(cursor)
+        if limit and len(gst) > limit:
+            problems.append(
+                f"That GST number is {len(gst)} characters and the field holds "
+                f"{limit}. Check it for a stray space or a pasted line break — "
+                f"nothing else about it is being checked.")
 
     if rec.get('tax_mode') not in (0, 1, 2, None):
         problems.append("Tax mode must be within the state, another state, or outside India.")
@@ -6342,10 +7085,10 @@ def vendor_list():
 
     currencies = {int(c['curr_id']): c['curr_code'] for c in _currency_choices(cursor)}
 
-    # Worth surfacing rather than leaving to be found on an invoice: these
-    # came in through the import, which does not check the shape.
-    bad_gst = [v for v in vendors
-               if v.get('gst_no') and not GSTIN_RE.match(str(v['gst_no']).upper().replace(' ', ''))]
+    # Nothing is flagged by shape any more. The numbers in use are not all
+    # the same length, so a banner calling them malformed was wrong about
+    # real vendors. The variable stays so vendor_list.html needs no change.
+    bad_gst = []
 
     cursor.close()
     db.close()
@@ -6980,6 +7723,8 @@ def storage_import():
                 msg += f" Units added: {', '.join(result['units_created'])}."
             if result['desc_changed']:
                 msg += f" {len(result['desc_changed'])} description(s) replaced by the file."
+            if result['mpn_changed']:
+                msg += f" {len(result['mpn_changed'])} MPN(s) replaced by the file."
             if result['mfr_changed']:
                 msg += f" {len(result['mfr_changed'])} manufacturer(s) changed."
             flash(msg, "success")
@@ -7165,21 +7910,43 @@ def unit_conversion_delete(conv_id):
     return redirect(url_for('unit_conversion_list'))
 
 
-@app.route('/storage')
-def storage_list():
-    search = request.args.get('search', '')
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
+# ─── STORAGE LIST AND EXPORT ────────────────────────────
+#
+# The query, the availability arithmetic and the stock filter are shared by
+# the screen and the Excel export, so the two can never disagree about what
+# a filter means.
+
+STORAGE_STOCK_CHOICES = [
+    ('all', 'All items'),
+    ('in',  'Holding stock'),
+    ('out', 'Not holding stock'),
+]
+
+
+def _storage_rows(cursor, search='', stock='all'):
+    """Storage rows with availability worked out, filtered as the screen asks."""
     # Migrated from items.manufacturer_name — now sourced via mfr_id -> manufacturer table
-    query = """SELECT s.*, i.item_code, i.`desc` as item_desc, i.mpn, COALESCE(m.mfr_short_name, m.mfr_full_name) as manufacturer_name
+    query = """SELECT s.*, i.item_code, i.`desc` as item_desc, i.mpn,
+                      COALESCE(m.mfr_short_name, m.mfr_full_name) as manufacturer_name,
+                      u.unit_short_name AS unit
                FROM storage s
                JOIN items i ON s.item_id = i.item_id
                LEFT JOIN manufacturer m ON i.mfr_id = m.mfr_id
+               LEFT JOIN units u ON u.unit_id = i.unit_id
                WHERE 1=1"""
     params = []
     if search:
         query += " AND (i.item_code LIKE %s OR s.store_location LIKE %s OR i.mpn LIKE %s OR m.mfr_short_name LIKE %s OR m.mfr_full_name LIKE %s)"
         params += [f'%{search}%', f'%{search}%', f'%{search}%', f'%{search}%', f'%{search}%']
+
+    # Holding stock means the store physically has some. Blocked stock is
+    # still held, so a fully blocked item counts as holding it -- blocking is
+    # a reservation, not a removal.
+    if stock == 'in':
+        query += " AND COALESCE(s.physical_availability, 0) > 0"
+    elif stock == 'out':
+        query += " AND COALESCE(s.physical_availability, 0) <= 0"
+
     query += " ORDER BY s.store_id ASC"
     cursor.execute(query, params)
     storages = cursor.fetchall()
@@ -7220,13 +7987,145 @@ def storage_list():
         s['currently_available'] = max(0.0, round(held - blocked_by_item.get(iid, 0.0),
                                                   QTY_DP))
         total_physical_availability += float(s.get('physical_availability') or 0)
+
+    # Adding four thousand floats accumulates binary rounding error -- 0.05 has
+    # no exact binary form -- which is how the total reached 4,700,580.049799999.
+    # The quantities themselves are exact to six places, so the sum is too.
+    total_physical_availability = round(total_physical_availability, QTY_DP)
         
     if total_physical_availability.is_integer():
         total_physical_availability = int(total_physical_availability)
 
+    return storages, total_physical_availability
+
+
+def _storage_filters(args):
+    stock = (args.get('stock') or 'all').lower()
+    if stock not in ('all', 'in', 'out'):
+        stock = 'all'
+    return (args.get('search', ''), stock)
+
+
+@app.route('/storage')
+def storage_list():
+    search, stock = _storage_filters(request.args)
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+    storages, total_physical_availability = _storage_rows(cursor, search, stock)
+
+    # Counted over everything the search matches, not just the filtered rows,
+    # so the two numbers still add up when one of them is being looked at.
+    all_rows, _ = _storage_rows(cursor, search, 'all')
+    holding = sum(1 for r in all_rows
+                  if float(r.get('physical_availability') or 0) > 0)
+
     cursor.close()
     db.close()
-    return render_template('storage_list.html', storages=storages, search=search, total_physical_availability=total_physical_availability)
+    return render_template('storage_list.html', storages=storages, search=search,
+                           total_physical_availability=total_physical_availability,
+                           stock=stock, stock_choices=STORAGE_STOCK_CHOICES,
+                           count_holding=holding,
+                           count_empty=len(all_rows) - holding,
+                           count_all=len(all_rows))
+
+
+@app.route('/storage/export')
+def storage_export():
+    """The same rows the screen is showing, as .xlsx."""
+    search, stock = _storage_filters(request.args)
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+    storages, total_physical_availability = _storage_rows(cursor, search, stock)
+    cursor.close()
+    db.close()
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    cols = [
+        ('item_code',              'Item Code',    16),
+        ('item_desc',              'Description',  46),
+        ('mpn',                    'MPN',          20),
+        ('manufacturer_name',      'Manufacturer', 20),
+        ('unit',                   'Unit',          8),
+        ('store_location',         'Store Location', 18),
+        ('physical_availability',  'Physical Availability', 20),
+        ('blocked',                'Blocked',      12),
+        ('currently_available',    'Currently Available', 19),
+    ]
+    numeric = {'physical_availability', 'blocked', 'currently_available'}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Storage'
+    ws.append([label for _, label, _ in cols])
+    head_fill = PatternFill('solid', fgColor='1F3864')
+    for c in range(1, len(cols) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = head_fill
+        cell.font = Font(bold=True, color='FFFFFF', size=10)
+        cell.alignment = Alignment(horizontal='center', vertical='center',
+                                   wrap_text=True)
+
+    for r in storages:
+        held = float(r.get('physical_availability') or 0)
+        avail = float(r.get('currently_available') or 0)
+        r = dict(r)
+        r['blocked'] = round(held - avail, QTY_DP) if held > avail else 0
+        ws.append([r.get(key) for key, _, _ in cols])
+
+    last = ws.max_row
+    thin = Side(style='thin', color='D9D9D9')
+    for c, (key, _, width) in enumerate(cols, start=1):
+        ws.column_dimensions[get_column_letter(c)].width = width
+        if key in numeric:
+            for i in range(2, last + 1):
+                ws.cell(row=i, column=c).number_format = '#,##0.00'
+    for i in range(1, last + 1):
+        for c in range(1, len(cols) + 1):
+            ws.cell(row=i, column=c).border = Border(bottom=thin)
+    ws.freeze_panes = 'A2'
+    if last >= 1:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{last}"
+
+    meta = wb.create_sheet('What this covers')
+    holding = sum(1 for r in storages
+                  if float(r.get('physical_availability') or 0) > 0)
+    for line in [
+        ['Exported', datetime.now().strftime('%d-%b-%Y %H:%M')],
+        ['', ''],
+        ['Filter', dict(STORAGE_STOCK_CHOICES)[stock]],
+        ['Search', search or '(none)'],
+        ['', ''],
+        ['Rows', len(storages)],
+        ['  holding stock', holding],
+        ['  holding none', len(storages) - holding],
+        ['Total physical availability', total_physical_availability],
+        ['', ''],
+        ['Physical Availability', 'What the store holds.'],
+        ['Blocked', 'Reserved against a work order. Still held, still counted '
+                    'as holding stock -- a reservation is not a removal.'],
+        ['Currently Available', 'Physical minus blocked, floored at zero.'],
+        ['Unit', 'The item\'s stock unit. Blank means the item has none, so '
+                 'its quantity is a bare number with nothing to convert it.'],
+    ]:
+        meta.append(line)
+    meta.column_dimensions['A'].width = 28
+    meta.column_dimensions['B'].width = 70
+    for i in range(1, meta.max_row + 1):
+        meta.cell(row=i, column=1).font = Font(bold=True)
+        meta.cell(row=i, column=2).alignment = Alignment(wrap_text=True,
+                                                         vertical='top')
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f"Tribi_storage_{stock}_{date.today():%Y%m%d}.xlsx")
 
 # ─── STORAGE ADD ────────────────────────────────────────
 @app.route('/storage/add', methods=['GET', 'POST'])
@@ -7323,6 +8222,62 @@ def storage_add():
         if not item_id:
             flash("Choose an existing item, or type a new item code and describe it.", 'error')
             return _storage_add_form(cursor, db, request.form)
+
+        # ── A DESCRIPTION OR MPN CORRECTED ON AN EXISTING ITEM ──────────
+        #
+        # Those two fields are no longer read-only when an existing code is
+        # picked, so what comes back may be a correction to the item master
+        # rather than a copy of it. The rules are the import's, so a
+        # correction typed here and one arriving in a spreadsheet behave
+        # identically:
+        #
+        #   a non-blank value that differs replaces the old one
+        #   a blank cell never blanks the master
+        #   a difference only in spacing is not a change
+        #
+        # The UNIT is deliberately not editable on this screen and is not
+        # touched here. The twenty-one copper wire items were moved to grams
+        # by hand, and that must not be undoable from a stock entry.
+        if not created_item:
+            cursor.execute("SELECT `desc`, mpn FROM items WHERE item_id = %s",
+                           (item_id,))
+            master = cursor.fetchone() or {}
+            sets, params, told = [], [], []
+
+            new_desc = (request.form.get('new_item_desc') or '').strip()[:100]
+            old_desc = (master.get('desc') or '').strip()
+            if new_desc and _norm_space(new_desc) != _norm_space(old_desc):
+                sets.append("`desc` = %s")
+                params.append(new_desc)
+                told.append("description")
+
+            edit_mfr, edit_mpn = split_manufacturer_mpn(
+                (request.form.get('new_item_mpn') or '').strip() or None)
+            new_mpn = (edit_mpn or '').strip()[:100]
+            old_mpn = (master.get('mpn') or '').strip()
+            if new_mpn and _norm_space(new_mpn) != _norm_space(old_mpn):
+                sets.append("mpn = %s")
+                params.append(new_mpn)
+                told.append("part number")
+
+            if edit_mfr:
+                edit_cache, edit_made = {}, []
+                edit_mfr_id = _resolve_manufacturer(cursor, edit_mfr,
+                                                    edit_cache, edit_made)
+                if edit_mfr_id:
+                    sets.append("mfr_id = %s")
+                    params.append(edit_mfr_id)
+                    told.append("manufacturer")
+                    if edit_made:
+                        flash(f"New manufacturer added: {', '.join(edit_made)}.",
+                              'success')
+
+            if sets:
+                params.append(item_id)
+                cursor.execute(f"UPDATE items SET {', '.join(sets)} WHERE item_id = %s",
+                               tuple(params))
+                flash(f"Item master updated — {' and '.join(told)} changed. "
+                      f"This applies everywhere, not just here.", 'success')
 
         # The HSN lives on the item, in hsn_items — storage has no column for
         # it and one row per item, so classifying here classifies the item
@@ -7728,6 +8683,9 @@ def issue_transaction_list():
             """, (qty_issued, wo_id, item_id))
 
         # Release blocks and reduce physical stock — the step this form was missing.
+        if wo_id:
+            refresh_wo_status(cursor, wo_id)
+
         if not apply_issue_to_stock(cursor, item_id, wo_id, qty_issued):
             # Same race as the work order Issue button. The transaction row and
             # the work_order_item update above are inside this rollback too, so
@@ -7927,6 +8885,35 @@ def ensure_schema_columns():
             conn.commit()
             print("Added currency column to purchase_order table.")
 
+        # Unit prices were DECIMAL(10,3), so a USD rate such as 0.1234 was
+        # cut to 0.123 on save. Four places is what the printed PO already
+        # shows. Widening only adds room: every stored price keeps its value,
+        # and the column is checked first so this runs once, not every start.
+        cursor.execute("""SELECT NUMERIC_PRECISION, NUMERIC_SCALE, IS_NULLABLE, COLUMN_DEFAULT
+                          FROM INFORMATION_SCHEMA.COLUMNS
+                          WHERE TABLE_SCHEMA = DATABASE()
+                            AND TABLE_NAME = 'po_items' AND COLUMN_NAME = 'unit_price'""")
+        col = cursor.fetchone()
+        if col and (col['NUMERIC_SCALE'] or 0) < PRICE_DP:
+            try:
+                # Keep the column's NOT NULL and default exactly as they are;
+                # only the number of decimal places changes.
+                null_sql = 'NULL' if col['IS_NULLABLE'] == 'YES' else 'NOT NULL'
+                dflt = col['COLUMN_DEFAULT']
+                if dflt is None or str(dflt).upper() == 'NULL':
+                    dflt_sql = 'DEFAULT NULL' if null_sql == 'NULL' else ''
+                else:
+                    dflt_sql = 'DEFAULT ' + str(float(str(dflt).strip("'")))
+                cursor.execute(f"ALTER TABLE po_items MODIFY COLUMN unit_price "
+                               f"DECIMAL(14,{PRICE_DP}) {null_sql} {dflt_sql}")
+                conn.commit()
+                print(f"po_items.unit_price widened to {PRICE_DP} decimal places.")
+            except Exception as e:
+                # The app still runs; prices just keep 3 places until the
+                # database account is allowed to ALTER this table.
+                app.logger.error("Could not widen po_items.unit_price to %s places: %s",
+                                 PRICE_DP, e)
+
         cursor.close()
         conn.close()
     except Exception as e:
@@ -7947,15 +8934,461 @@ def format_po_number(po_number, date_raised, version, cursor=None):
         dt = date.today()
         
     fy = get_financial_year(cursor=cursor, date_obj=dt)
-        
-    seq = f"{po_number:04d}"
-    
+
     try:
         ver_val = int(float(version)) if version is not None else 0
     except (ValueError, TypeError):
         ver_val = 0
-        
-    return f"{fy}/{seq}.{ver_val}"
+
+    # A PO's number is stored as a plain integer and formatted on the way
+    # out, so a new format would otherwise re-letter every PO ever raised --
+    # including ones already printed and sent to vendors. The format is
+    # therefore looked up by the date the PO was raised: a change applies
+    # from the day it is made, and older POs keep the number they were sent
+    # with.
+    fmt, pad = po_format_on(dt, cursor=cursor)
+    return render_number(fmt, pad, po_number, fy=fy,
+                         fy_start=str(fy).split('-')[0], year=dt.year,
+                         ver=ver_val)
+
+
+_PO_FORMAT_CACHE = {'at': 0.0, 'history': None}
+
+
+def po_format_history(cursor=None, fresh=False):
+    """Every PO format ever set, oldest first: [{'from', 'format', 'pad'}].
+
+    format_po_number runs once per PO on every list, so this is cached for
+    thirty seconds rather than read from the database each time. Saving a
+    new format clears it in this process; another worker picks it up within
+    the thirty seconds.
+    """
+    import time
+    now = time.monotonic()
+    if (not fresh and _PO_FORMAT_CACHE['history'] is not None
+            and now - _PO_FORMAT_CACHE['at'] < 30):
+        return _PO_FORMAT_CACHE['history']
+    raw = get_setting('po_number_format_history', '', cursor=cursor)
+    try:
+        hist = json.loads(raw) if raw else []
+    except ValueError:
+        hist = []
+    hist = sorted((h for h in hist
+                   if isinstance(h, dict) and h.get('from') and h.get('format')),
+                  key=lambda h: h['from'])
+    _PO_FORMAT_CACHE.update(at=now, history=hist)
+    return hist
+
+
+def po_format_on(dt, cursor=None):
+    """The PO format that was in force on a given date."""
+    fmt, pad = DEFAULT_PO_FORMAT, DEFAULT_NUMBER_PAD
+    key = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
+    for h in po_format_history(cursor):
+        if h['from'] <= key:
+            fmt = h['format']
+            try:
+                pad = int(h.get('pad') or DEFAULT_NUMBER_PAD)
+            except (TypeError, ValueError):
+                pad = DEFAULT_NUMBER_PAD
+    return fmt, pad
+
+
+# ─── REPORTS ─────────────────────────────────────────────
+#
+# One row per transaction line. A PO line is a row, a GRN line is a row, and
+# each is filtered by its OWN date -- POs by date_raised, GRNs by
+# received_date -- so a window shows what was ordered in it and what arrived
+# in it, which are different questions and rarely the same set.
+#
+# Every row carries the item's CURRENT stock, not the stock at the time. There
+# is no history table to read a past balance from, and inventing one by
+# subtracting movements would be wrong the moment anything was adjusted by
+# hand. The column is labelled for what it is.
+
+REPORT_COLUMNS = [
+    ('source',          'Type',          10),
+    ('doc_date',        'Date',          12),
+    ('doc_no',          'Document',      18),
+    ('vendor_name',     'Vendor',        26),
+    ('item_code',       'Item Code',     16),
+    ('item_desc',       'Description',   46),
+    ('mpn',             'MPN',           20),
+    ('manufacturer',    'Make',          16),
+    ('hsn_code',        'HSN',           12),
+    ('unit',            'Unit',           8),
+    ('qty_ordered',     'Qty Ordered',   13),
+    ('rate',            'Rate',          12),
+    ('value',           'Value',         14),
+    ('qty_received',    'Qty Received',  13),
+    ('qty_accepted',    'Qty Accepted',  13),
+    ('qty_rejected',    'Qty Rejected',  13),
+    ('status',          'Status',        18),
+    ('current_stock',   'Stock Now',     12),
+    ('store_location',  'Store',         16),
+]
+
+_REPORT_NUMERIC = {'qty_ordered', 'rate', 'value', 'qty_received',
+                   'qty_accepted', 'qty_rejected', 'current_stock'}
+
+
+def _report_filters(args):
+    """Read the filter form, with a sane window when nothing is chosen."""
+    today = date.today()
+    raw_from = (args.get('from_date') or '').strip()
+    raw_to = (args.get('to_date') or '').strip()
+
+    def parse(s, fallback):
+        if not s:
+            return fallback
+        try:
+            return datetime.strptime(s, '%Y-%m-%d').date()
+        except ValueError:
+            return fallback
+
+    d_to = parse(raw_to, today)
+    d_from = parse(raw_from, d_to - timedelta(days=30))
+    if d_from > d_to:
+        d_from, d_to = d_to, d_from
+
+    source = (args.get('source') or 'both').lower()
+    if source not in ('po', 'grn', 'both'):
+        source = 'both'
+
+    vendor_id = (args.get('vendor_id') or '').strip()
+    try:
+        vendor_id = int(vendor_id) if vendor_id else None
+    except ValueError:
+        vendor_id = None
+
+    return {
+        'from_date': d_from,
+        'to_date': d_to,
+        'source': source,
+        'vendor_id': vendor_id,
+        'item_code': (args.get('item_code') or '').strip(),
+    }
+
+
+def _report_rows(cursor, f):
+    """Every PO and GRN line matching the filters, newest first."""
+    rows = []
+    like = '%' + f['item_code'] + '%' if f['item_code'] else None
+
+    if f['source'] in ('po', 'both'):
+        sql = """SELECT po.po_id, po.po_number, po.po_version_number,
+                        po.date_raised, po.po_status, po.currency,
+                        v.short_name AS vendor_short, v.full_name AS vendor_full,
+                        i.item_code, i.`desc` AS item_desc, i.mpn,
+                        COALESCE(m.mfr_short_name, m.mfr_full_name) AS manufacturer,
+                        h.hsn_code,
+                        u.unit_short_name AS unit,
+                        poi.item_id, poi.qty_ordered, poi.unit_price
+                   FROM po_items poi
+                   JOIN purchase_order po ON po.po_id = poi.po_id
+                   JOIN items i           ON i.item_id = poi.item_id
+                   LEFT JOIN vendor v     ON v.vendor_id = po.vendor_id
+                   LEFT JOIN manufacturer m ON m.mfr_id = i.mfr_id
+                   LEFT JOIN hsn h        ON h.hsn_id = poi.hsn_id
+                   LEFT JOIN units u      ON u.unit_id = poi.unit_id
+                  WHERE po.date_raised BETWEEN %s AND %s"""
+        params = [f['from_date'], f['to_date']]
+        if f['vendor_id']:
+            sql += " AND po.vendor_id = %s"
+            params.append(f['vendor_id'])
+        if like:
+            sql += " AND i.item_code LIKE %s"
+            params.append(like)
+        cursor.execute(sql, tuple(params))
+        for r in cursor.fetchall():
+            qty = float(r['qty_ordered'] or 0)
+            rate = float(r['unit_price'] or 0)
+            rows.append({
+                'source': 'PO',
+                'doc_date': r['date_raised'],
+                'doc_no': format_po_number(r['po_number'], r['date_raised'],
+                                           r['po_version_number'], cursor),
+                'vendor_name': r['vendor_short'] or r['vendor_full'] or '',
+                'item_id': r['item_id'],
+                'item_code': r['item_code'],
+                'item_desc': r['item_desc'] or '',
+                'mpn': r['mpn'] or '',
+                'manufacturer': r['manufacturer'] or '',
+                'hsn_code': r['hsn_code'] or '',
+                'unit': r['unit'] or '',
+                'qty_ordered': qty,
+                'rate': rate,
+                'value': round(qty * rate, 4),
+                'qty_received': None,
+                'qty_accepted': None,
+                'qty_rejected': None,
+                'status': r['po_status'] or '',
+            })
+
+    if f['source'] in ('grn', 'both'):
+        sql = """SELECT g.grn_id, g.grn_no, g.received_date, g.invoice_no,
+                        g.status AS grn_status,
+                        v.short_name AS vendor_short, v.full_name AS vendor_full,
+                        i.item_code, i.`desc` AS item_desc, i.mpn,
+                        COALESCE(m.mfr_short_name, m.mfr_full_name) AS manufacturer,
+                        h.hsn_code,
+                        u.unit_short_name AS unit,
+                        gi.item_id, gi.qty_received, gi.qty_accepted,
+                        gi.qty_rejected, gi.qc_status, gi.location
+                   FROM grn_item gi
+                   JOIN grn g   ON g.grn_id = gi.grn_id
+                   JOIN items i ON i.item_id = gi.item_id
+                   LEFT JOIN vendor v     ON v.vendor_id = g.vendor_id
+                   LEFT JOIN manufacturer m ON m.mfr_id = i.mfr_id
+                   LEFT JOIN hsn_items hi ON hi.item_id = i.item_id
+                   LEFT JOIN hsn h        ON h.hsn_id = hi.hsn_id
+                   LEFT JOIN units u      ON u.unit_id = gi.unit_id
+                  WHERE g.received_date BETWEEN %s AND %s"""
+        params = [f['from_date'], f['to_date']]
+        if f['vendor_id']:
+            sql += " AND g.vendor_id = %s"
+            params.append(f['vendor_id'])
+        if like:
+            sql += " AND i.item_code LIKE %s"
+            params.append(like)
+        cursor.execute(sql, tuple(params))
+        for r in cursor.fetchall():
+            doc = r['grn_no'] or ''
+            if r['invoice_no']:
+                doc = f"{doc} (Inv {r['invoice_no']})"
+            rows.append({
+                'source': 'GRN',
+                'doc_date': r['received_date'],
+                'doc_no': doc,
+                'vendor_name': r['vendor_short'] or r['vendor_full'] or '',
+                'item_id': r['item_id'],
+                'item_code': r['item_code'],
+                'item_desc': r['item_desc'] or '',
+                'mpn': r['mpn'] or '',
+                'manufacturer': r['manufacturer'] or '',
+                'hsn_code': r['hsn_code'] or '',
+                'unit': r['unit'] or '',
+                'qty_ordered': None,
+                'rate': None,
+                'value': None,
+                'qty_received': float(r['qty_received'] or 0),
+                'qty_accepted': float(r['qty_accepted'] or 0),
+                'qty_rejected': float(r['qty_rejected'] or 0),
+                'status': r['qc_status'] or r['grn_status'] or '',
+                'store_location': r['location'] or '',
+            })
+
+    # Current stock, one lookup for every item on the report rather than one
+    # per row. storage holds a single row per item (uq_storage_item).
+    item_ids = sorted({r['item_id'] for r in rows if r.get('item_id')})
+    stock = {}
+    if item_ids:
+        marks = ','.join(['%s'] * len(item_ids))
+        cursor.execute(
+            "SELECT item_id, store_location, physical_availability "
+            "FROM storage WHERE item_id IN (%s)" % marks, tuple(item_ids))
+        for s in cursor.fetchall():
+            stock[int(s['item_id'])] = s
+
+    for r in rows:
+        s = stock.get(int(r['item_id'])) if r.get('item_id') else None
+        r['current_stock'] = float(s['physical_availability'] or 0) if s else 0.0
+        if not r.get('store_location'):
+            r['store_location'] = (s or {}).get('store_location') or ''
+
+    rows.sort(key=lambda r: (r['doc_date'] or date.min, r['source'],
+                             r['item_code']), reverse=True)
+    return rows
+
+
+def _report_totals(rows):
+    """Column totals, counting only the rows that carry each figure."""
+    def s(key):
+        return round(sum(float(r[key]) for r in rows if r.get(key) is not None), 4)
+    return {
+        'lines': len(rows),
+        'po_lines': sum(1 for r in rows if r['source'] == 'PO'),
+        'grn_lines': sum(1 for r in rows if r['source'] == 'GRN'),
+        'value': s('value'),
+        'qty_ordered': s('qty_ordered'),
+        'qty_received': s('qty_received'),
+        'qty_accepted': s('qty_accepted'),
+        'qty_rejected': s('qty_rejected'),
+    }
+
+
+REPORT_SCREEN_LIMIT = 500
+
+
+@app.route('/reports')
+def reports():
+    f = _report_filters(request.args)
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""SELECT vendor_id, short_name, full_name
+                        FROM vendor
+                       WHERE COALESCE(is_deleted, 0) = 0
+                       ORDER BY short_name""")
+    vendors = cursor.fetchall()
+
+    rows = _report_rows(cursor, f)
+    totals = _report_totals(rows)
+    shown = rows[:REPORT_SCREEN_LIMIT]
+
+    cursor.close()
+    db.close()
+    return render_template('reports.html',
+                           filters=f, vendors=vendors, rows=shown,
+                           totals=totals, columns=REPORT_COLUMNS,
+                           truncated=len(rows) > len(shown),
+                           screen_limit=REPORT_SCREEN_LIMIT)
+
+
+@app.route('/reports/export')
+def reports_export():
+    """The same rows as the screen, every one of them, as .xlsx."""
+    f = _report_filters(request.args)
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+    rows = _report_rows(cursor, f)
+    totals = _report_totals(rows)
+    cursor.close()
+    db.close()
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Report'
+
+    head_fill = PatternFill('solid', fgColor='1F3864')
+    head_font = Font(bold=True, color='FFFFFF', size=10)
+    thin = Side(style='thin', color='D9D9D9')
+
+    ws.append([label for _, label, _ in REPORT_COLUMNS])
+    for c in range(1, len(REPORT_COLUMNS) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = head_fill
+        cell.font = head_font
+        cell.alignment = Alignment(horizontal='center', vertical='center',
+                                   wrap_text=True)
+
+    for r in rows:
+        ws.append([r.get(key) for key, _, _ in REPORT_COLUMNS])
+
+    last = ws.max_row
+    for c, (key, _, width) in enumerate(REPORT_COLUMNS, start=1):
+        ws.column_dimensions[get_column_letter(c)].width = width
+        if key in _REPORT_NUMERIC:
+            fmt = '#,##0.0000' if key == 'rate' else '#,##0.00'
+            for row_i in range(2, last + 1):
+                ws.cell(row=row_i, column=c).number_format = fmt
+        if key == 'doc_date':
+            for row_i in range(2, last + 1):
+                ws.cell(row=row_i, column=c).number_format = 'dd-mmm-yyyy'
+    for row_i in range(1, last + 1):
+        for c in range(1, len(REPORT_COLUMNS) + 1):
+            ws.cell(row=row_i, column=c).border = Border(bottom=thin)
+
+    ws.freeze_panes = 'A2'
+    if last >= 1:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(REPORT_COLUMNS))}{last}"
+
+    # A second sheet saying what the first one is, so a file that has been
+    # emailed on still explains its own filters a month later.
+    meta = wb.create_sheet('What this covers')
+    for line in [
+        ['Report generated', datetime.now().strftime('%d-%b-%Y %H:%M')],
+        ['', ''],
+        ['Date from', f['from_date'].strftime('%d-%b-%Y')],
+        ['Date to', f['to_date'].strftime('%d-%b-%Y')],
+        ['Showing', {'po': 'Purchase orders only',
+                     'grn': 'GRNs only',
+                     'both': 'Purchase orders and GRNs'}[f['source']]],
+        ['Vendor filter', f['vendor_id'] or 'All vendors'],
+        ['Item code filter', f['item_code'] or 'All items'],
+        ['', ''],
+        ['Lines', totals['lines']],
+        ['  of which PO lines', totals['po_lines']],
+        ['  of which GRN lines', totals['grn_lines']],
+        ['Total ordered value', totals['value']],
+        ['', ''],
+        ['Dates', 'A PO line is dated by when the PO was raised, a GRN line '
+                  'by when it was received. They are different questions.'],
+        ['Stock Now', 'The stock the item holds TODAY, not its stock at the '
+                      'time of the transaction. Nothing records a past '
+                      'balance, so no past balance is shown.'],
+        ['Blank cells', 'A PO line has no received or accepted quantity, and '
+                        'a GRN line has no rate. Blank means not applicable, '
+                        'not zero.'],
+    ]:
+        meta.append(line)
+    meta.column_dimensions['A'].width = 24
+    meta.column_dimensions['B'].width = 72
+    for i in range(1, meta.max_row + 1):
+        meta.cell(row=i, column=1).font = Font(bold=True)
+        meta.cell(row=i, column=2).alignment = Alignment(wrap_text=True,
+                                                         vertical='top')
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    name = (f"Tribi_report_{f['from_date']:%Y%m%d}_{f['to_date']:%Y%m%d}"
+            f"_{f['source']}.xlsx")
+    return send_file(
+        buffer,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=name)
+
+
+# The name and role in the session were copied at login and never looked at
+# again, so an admin renaming someone, changing their role or switching them
+# off did nothing to anyone already signed in. They are re-read from `users`
+# here -- at most once a minute, so this costs one indexed lookup a minute per
+# person rather than one per page.
+SESSION_USER_REFRESH_SECONDS = 60
+
+
+def refresh_session_user(force=False):
+    """Bring the session's name and role in line with the users table.
+
+    Returns False when the account has gone or been made inactive, so the
+    caller can sign the person out. Any database trouble keeps what the
+    session already has rather than locking everyone out.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return False
+    now = datetime.now().timestamp()
+    if not force and now - session.get('_user_checked', 0) < SESSION_USER_REFRESH_SECONDS:
+        return True
+    conn = None
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT username, full_name, role, is_active "
+                    "FROM users WHERE user_id = %s", (user_id,))
+        user = cur.fetchone()
+        cur.close()
+    except Exception:
+        return True
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    if not user or not user.get('is_active'):
+        return False
+    for key in ('username', 'full_name', 'role'):
+        if session.get(key) != user[key]:
+            session[key] = user[key]
+    session['_user_checked'] = now
+    return True
 
 
 @app.before_request
@@ -7965,6 +9398,13 @@ def require_login():
         return
     if request.endpoint not in allowed_endpoints and 'user_id' not in session:
         return redirect(url_for('login'))
+    if request.endpoint not in allowed_endpoints and request.endpoint != 'logout':
+        # The dashboard is where the name and role are shown largest, so it
+        # never waits for the once-a-minute check.
+        if not refresh_session_user(force=(request.endpoint == 'dashboard')):
+            session.clear()
+            flash('Your account is no longer active. Please contact an administrator.', 'error')
+            return redirect(url_for('login'))
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -7992,6 +9432,7 @@ def login():
             session['username'] = user['username']
             session['role'] = user['role']
             session['full_name'] = user['full_name']
+            session['_user_checked'] = datetime.now().timestamp()
             
             cursor.close()
             db.close()
@@ -8013,6 +9454,16 @@ def logout():
     return redirect(url_for('login'))
 
 
+def _static_stamp():
+    # Browsers keep style.css for a while, so a new copy of it can sit
+    # unused behind the old one. Tagging the link with the file's own
+    # modified time means any change to it is fetched on the next page.
+    try:
+        return int(os.path.getmtime(os.path.join(app.static_folder, 'style.css')))
+    except OSError:
+        return APP_VERSION
+
+
 @app.context_processor
 def inject_global_policy_alert():
     try:
@@ -8027,6 +9478,7 @@ def inject_global_policy_alert():
 
     return {
         'app_version': APP_VERSION,
+        'static_v': _static_stamp(),
         'policy_expired_alert': policy_expired,
         'policy_alert_message': 'The duration for the existing policy number has expired, please change the date/ policy condition.'
     }
@@ -8056,9 +9508,197 @@ def settings():
         'expiration_date': get_setting('policy_expiration_date', '2026-12-31', cursor=cursor)
     }
     
+    # Read while the connection is still open.
+    numbering = numbering_summary(cursor)
+
     cursor.close()
     db.close()
-    return render_template('settings.html', users_list=users_list, fy=fy_settings, policy=policy_settings)
+    return render_template('settings.html', users_list=users_list, fy=fy_settings,
+                           policy=policy_settings, numbering=numbering)
+
+
+def numbering_summary(cursor):
+    """Everything the numbering card and its dialog need, read-only.
+
+    The 'next' numbers are worked out the same way raising a PO or GRN works
+    them out, without consuming either -- so what the card says is what the
+    next one will actually be.
+    """
+    today = date.today()
+    fy = get_financial_year(cursor=cursor) or ''
+    fy_key = po_fy_key(today)
+    po_fmt, po_pad = po_format_on(today, cursor=cursor)
+    po_next, po_highest, po_taken = generate_po_number(cursor, with_seq=True)
+    fy_from, fy_to = f"{fy_key}-04-01", f"{fy_key + 1}-03-31"
+
+    grn_fmt, grn_pad, grn_ctx, grn_start, grn_year = grn_numbering(cursor)
+    grn_next, grn_next_seq, grn_highest, grn_taken = \
+        generate_grn_number(cursor, with_seq=True)
+
+    wo_fmt, wo_pad, wo_ctx, wo_start, wo_fy = wo_numbering(cursor)
+    wo_next, wo_next_seq, wo_highest, wo_taken = \
+        generate_wo_number(cursor, with_seq=True)
+
+    return {
+        'fy': fy,
+        'po': {
+            'format': po_fmt, 'pad': po_pad,
+            'start': po_start_for(cursor, fy_key),
+            'fy_key': fy_key,
+            'fy_span': f"{fy_from[:4]}-{fy_to[:4]}",
+            'highest': po_highest or None,
+            'next': format_po_number(po_next, today, 0, cursor),
+            'next_seq': po_next,
+            'taken': po_taken,
+            'restarted': restart_mark(cursor, f'po_restart_after_{fy_key}') is not None,
+            'ctx': {'fy': fy, 'fy_start': str(fy).split('-')[0],
+                    'year': today.year, 'ver': 0},
+            'history': po_format_history(cursor, fresh=True),
+        },
+        'grn': {
+            'format': grn_fmt, 'pad': grn_pad, 'start': grn_start,
+            'year': grn_year, 'next': grn_next, 'ctx': grn_ctx,
+            'next_seq': grn_next_seq, 'highest': grn_highest or None,
+            'taken': grn_taken,
+            'restarted': restart_mark(cursor, f'grn_restart_after_{grn_year}') is not None,
+        },
+        'wo': {
+            'format': wo_fmt, 'pad': wo_pad, 'start': wo_start,
+            'year': wo_fy, 'next': wo_next, 'ctx': wo_ctx,
+            'next_seq': wo_next_seq, 'highest': wo_highest or None,
+            'taken': wo_taken,
+            'restarted': restart_mark(cursor, f'wo_restart_after_{wo_fy}') is not None,
+        },
+        'tokens': NUMBERING_TOKENS,
+    }
+
+
+@app.route('/settings/numbering', methods=['POST'])
+def settings_numbering():
+    """Save the PO and GRN start numbers and formats from the dialog."""
+    if session.get('role') != 'admin':
+        flash('Only an admin can change how documents are numbered.', 'error')
+        return redirect(url_for('settings'))
+
+    f = request.form
+    po_fmt = (f.get('po_format') or '').strip()
+    grn_fmt = (f.get('grn_format') or '').strip()
+    wo_fmt = (f.get('wo_format') or '').strip()
+    po_pad, grn_pad, wo_pad = f.get('po_pad'), f.get('grn_pad'), f.get('wo_pad')
+
+    problems = [f"PO format: {p}" for p in numbering_problems('po', po_fmt, po_pad)]
+    problems += [f"GRN format: {p}" for p in numbering_problems('grn', grn_fmt, grn_pad)]
+    problems += [f"Work order format: {p}" for p in numbering_problems('wo', wo_fmt, wo_pad)]
+
+    def whole(name, label):
+        try:
+            v = int(str(f.get(name) or '').strip())
+            if v < 1:
+                raise ValueError
+            return v
+        except ValueError:
+            problems.append(f"{label} must be a whole number, 1 or more.")
+            return None
+    po_start = whole('po_start', 'PO start number')
+    grn_start = whole('grn_start', 'GRN start number')
+    wo_start = whole('wo_start', 'Work order start number')
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    if not problems:
+        # A GRN number that would not fit grn_no would fail on the insert,
+        # far from here and with a less helpful message.
+        _, _, ctx, _, _ = grn_numbering(cursor)
+        longest = render_number(grn_fmt, grn_pad, 10 ** int(grn_pad) - 1, **ctx)
+        if len(longest) > GRN_NO_WIDTH:
+            problems.append(f"GRN format: numbers would be {len(longest)} characters "
+                            f"and the GRN number column holds {GRN_NO_WIDTH}.")
+        _, _, wctx, _, _ = wo_numbering(cursor)
+        longest = render_number(wo_fmt, wo_pad, 10 ** int(wo_pad) - 1, **wctx)
+        if len(longest) > WO_NO_WIDTH:
+            problems.append(f"Work order format: numbers would be {len(longest)} "
+                            f"characters and the work order number column holds "
+                            f"{WO_NO_WIDTH}.")
+
+    if problems:
+        cursor.close()
+        db.close()
+        for msg in problems:
+            flash(msg, 'error')
+        return redirect(url_for('settings', numbering='open'))
+
+    today = date.today()
+    po_pad, grn_pad, wo_pad = int(po_pad), int(grn_pad), int(wo_pad)
+
+    def max_id(table, col):
+        cursor.execute(f"SELECT COALESCE(MAX({col}), 0) AS m FROM {table}")
+        return int((cursor.fetchone() or {}).get('m') or 0)
+
+    def apply_start(start_key, mark_key, new_start, current_start, table, col):
+        """Save a start number. If it is new -- or has never been applied --
+        record where it takes over, so numbering begins from it rather than
+        from whatever was issued before.
+
+        Re-saving the dialog with the start number untouched does not move
+        the mark, so a sequence already running from it is left running.
+        """
+        set_setting(start_key, str(new_start), cursor=cursor)
+        if new_start != current_start or restart_mark(cursor, mark_key) is None:
+            set_setting(mark_key, str(max_id(table, col)), cursor=cursor)
+            return True
+        return False
+
+    fy_key = po_fy_key(today)
+    restarted = {}
+    restarted['po'] = apply_start(f'po_start_{fy_key}', f'po_restart_after_{fy_key}',
+                                  po_start, po_start_for(cursor, fy_key),
+                                  'purchase_order', 'po_id')
+
+    # Only a real change goes into the history. Re-saving the dialog with the
+    # PO format untouched must not add an entry, or the history fills with
+    # noise; a change made today replaces any earlier change made today.
+    hist = po_format_history(cursor, fresh=True)
+    cur_fmt, cur_pad = po_format_on(today, cursor=cursor)
+    if (po_fmt, po_pad) != (cur_fmt, cur_pad):
+        hist = [h for h in hist if h['from'] != today.isoformat()]
+        hist.append({'from': today.isoformat(), 'format': po_fmt, 'pad': po_pad})
+        set_setting('po_number_format_history', json.dumps(hist), cursor=cursor)
+    _PO_FORMAT_CACHE.update(at=0.0, history=None)
+
+    _, _, _, grn_current, grn_year = grn_numbering(cursor)
+    set_setting('grn_number_format', grn_fmt, cursor=cursor)
+    set_setting('grn_number_pad', str(grn_pad), cursor=cursor)
+    restarted['grn'] = apply_start(f'grn_start_{grn_year}', f'grn_restart_after_{grn_year}',
+                                   grn_start, grn_current, 'grn', 'grn_id')
+
+    _, _, _, wo_current, wo_fy = wo_numbering(cursor)
+    set_setting('wo_number_format', wo_fmt, cursor=cursor)
+    set_setting('wo_number_pad', str(wo_pad), cursor=cursor)
+    restarted['wo'] = apply_start(f'wo_start_{wo_fy}', f'wo_restart_after_{wo_fy}',
+                                  wo_start, wo_current, 'work_order', 'wo_id')
+    db.commit()
+
+    s = numbering_summary(cursor)
+    cursor.close()
+    db.close()
+    flash(f"Numbering saved. Next PO {s['po']['next']}, next GRN "
+          f"{s['grn']['next']}, next work order {s['wo']['next']}.", 'success')
+
+    # Numbering now starts from the number given. Where older numbers sit
+    # ahead of it they are not reissued -- say which, so the jump past them
+    # is expected when the count gets there.
+    for label, key, asked in (('PO', 'po', po_start), ('GRN', 'grn', grn_start),
+                              ('Work order', 'wo', wo_start)):
+        ahead = [n for n in s[key].get('taken') or [] if n >= asked]
+        if restarted.get(key) and ahead:
+            span = (f"{ahead[0]}" if len(ahead) == 1
+                    else f"{ahead[0]}–{ahead[-1]}" if ahead[-1] - ahead[0] + 1 == len(ahead)
+                    else f"{len(ahead)} numbers between {ahead[0]} and {ahead[-1]}")
+            flash(f"{label} numbering restarts at {asked}. {span} already "
+                  f"used this year and will be skipped when the count reaches "
+                  f"{'it' if len(ahead) == 1 else 'them'}.", 'info')
+    return redirect(url_for('settings'))
 
 
 @app.route('/settings/financial-year', methods=['POST'])
@@ -8261,6 +9901,44 @@ def settings_user_edit(user_id):
 # it is wrapped in try/except, and username is UNIQUE — so if two workers
 # start at the same instant, the loser's duplicate-key error is caught
 # and printed rather than crashing the worker.
+def _install_error_log():
+    """Attach the rotating error log. Returns its path, or None if not used.
+
+    This used to live inside `if __name__ == '__main__':`, which meant it only
+    ran under `python app.py`. Behind waitress, gunicorn, IIS or a service
+    wrapper the module is imported, __name__ is not '__main__', and there was
+    no error log at all -- a 500 became a blank page with nothing written
+    anywhere. That is the same trap that hid the admin lockout after
+    deployment, so it is set up here, where importing is enough.
+
+    With TRIBI_DEBUG=1 the traceback goes to the screen and the file handler
+    would only duplicate it.
+    """
+    if os.environ.get('TRIBI_DEBUG', '').strip().lower() in ('1', 'true', 'yes'):
+        return None
+
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'tribi_errors.log')
+    # Importing twice under a reloader must not double every entry.
+    for h in app.logger.handlers:
+        if isinstance(h, RotatingFileHandler):
+            return log_path
+
+    handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+    handler.setLevel(logging.ERROR)
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s  %(levelname)s  %(message)s\n'
+        '  %(pathname)s:%(lineno)d\n'))
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.ERROR)
+    return log_path
+
+
+ERROR_LOG_PATH = _install_error_log()
+
 seed_admin_user()
 ensure_schema_columns()
 
@@ -8277,23 +9955,11 @@ if __name__ == '__main__':
     # Set TRIBI_DEBUG=1 to turn it back on while developing.
     debug_mode = os.environ.get('TRIBI_DEBUG', '').strip().lower() in ('1', 'true', 'yes')
 
-    if not debug_mode:
-        # With debug off an unhandled error becomes a blank 500 page, so the
-        # traceback has to go somewhere a person can read it. Without this,
-        # diagnosing a fault in the store means asking someone to reproduce it
-        # while you watch.
-        import logging
-        from logging.handlers import RotatingFileHandler
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                'tribi_errors.log')
-        handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
-        handler.setLevel(logging.ERROR)
-        handler.setFormatter(logging.Formatter(
-            '%(asctime)s  %(levelname)s  %(message)s\n'
-            '  %(pathname)s:%(lineno)d\n'))
-        app.logger.addHandler(handler)
-        app.logger.setLevel(logging.ERROR)
-        print(f"Errors will be written to {log_path}")
+    # The log handler itself is installed at import time, further up, so it is
+    # there however the application is started. All that is left here is to
+    # say where it went.
+    if ERROR_LOG_PATH:
+        print(f"Errors will be written to {ERROR_LOG_PATH}")
 
     print(f"Starting Tribi ERP — debug {'ON' if debug_mode else 'off'}")
     app.run(host='0.0.0.0', port=5000, debug=debug_mode, use_evalex=False)
