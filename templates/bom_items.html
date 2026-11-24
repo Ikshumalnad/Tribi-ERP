@@ -15,7 +15,7 @@
 <div class="detail-card" style="margin-bottom:20px;">
     <div class="detail-grid">
         <div><span class="detail-label">Work Order</span> {{ wo.wo_number }}</div>
-        <div><span class="detail-label">Sets</span> {{ wo.qty_to_build }}</div>
+        <div><span class="detail-label">Sets</span> {{ wo.qty_to_build|qty }}</div>
         <div><span class="detail-label">BOM Description</span> {{ bom.description or '—' }}</div>
     </div>
 </div>
@@ -28,9 +28,7 @@
 {% endwith %}
 
 <div style="margin-bottom:16px; display:flex; gap:8px; align-items:center;">
-    <span style="font-size:13px; font-weight:600; color:#4a5568;">Search Items:</span>
-    <input type="text" id="bom-item-search" placeholder="Search by item code or description..." 
-           style="width:320px; padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); outline: none;">
+    <input class="search-input" type="text" id="bom-item-search" placeholder="Search items">
 </div>
 
 <div class="table-wrapper">
@@ -56,11 +54,11 @@
             <td>{{ item.item_desc }}</td>
             <td>{{ item.mpn or '—' }}</td>
             <td>{{ item.unit or '—' }}</td>
-            <td>{{ item.bom_qty }}</td>
-            <td>{{ item.qty_required if wo else '—' }}</td>
-            <td>{{ item.available }}</td>
-            <td>{{ item.wo_blocked if wo else '—' }}</td>
-            <td>{{ item.qty_issued if wo else '—' }}</td>
+            <td>{{ item.bom_qty|qty }}</td>
+            <td>{{ item.qty_required|qty if wo else '—' }}</td>
+            <td>{{ item.available|qty }}</td>
+            <td>{{ item.wo_blocked|qty if wo else '—' }}</td>
+            <td>{{ item.qty_issued|qty if wo else '—' }}</td>
             {% if wo %}
             <td>
                 <button class="btn-primary btn-sm"

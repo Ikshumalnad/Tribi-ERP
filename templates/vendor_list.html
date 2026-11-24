@@ -32,10 +32,8 @@
 </div>
 {% endif %}
 
-<form method="GET" action="/vendors" style="margin-bottom:14px;">
-    <input type="text" name="q" value="{{ q or '' }}" class="input-field"
-           placeholder="Search name, GST number, city, phone or email…"
-           style="width:320px; max-width:100%;">
+<form method="GET" action="/vendors" class="search-bar">
+    <input type="text" name="q" value="{{ q or '' }}" class="search-input" placeholder="Search vendors">
     <button type="submit" class="btn-outline">Search</button>
     {% if q %}<a href="/vendors" class="btn-outline" style="margin-left:6px;">Clear</a>{% endif %}
 </form>

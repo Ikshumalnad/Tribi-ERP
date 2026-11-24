@@ -145,16 +145,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // stock entry. For a new code they are the fields that create it.
     function setItemFields(mode, data) {
         const existing = (mode === 'existing');
-        descIn.readOnly = existing;
-        mpnIn.readOnly  = existing;
+        // Description and MPN stay EDITABLE for an existing item: they are
+        // the item master's own fields, and the store corrects them here.
+        // Saving writes the correction back to the master, which is why the
+        // note says so. The UNIT stays locked either way -- the wire items
+        // are grams by hand and must not be changed from a stock entry.
+        descIn.readOnly = false;
+        mpnIn.readOnly  = false;
         unitIn.disabled = existing;
-        descIn.required = !existing;
+        descIn.required = true;
         unitIn.required = !existing;
-        reqDesc.style.display = existing ? 'none' : '';
+        reqDesc.style.display = '';
         reqUnit.style.display = existing ? 'none' : '';
 
         [descIn, mpnIn].forEach(function (el) {
-            el.style.backgroundColor = existing ? LOCKED_BG : '';
+            el.style.backgroundColor = '';
         });
         unitIn.style.backgroundColor = existing ? LOCKED_BG : '';
 
@@ -162,12 +167,14 @@ document.addEventListener('DOMContentLoaded', function() {
             descIn.value = data.item_desc || '';
             unitIn.value = data.unit_short_name || '';
             mpnIn.value  = data.mpn || '';
-            noteDesc.textContent = 'From the item master.';
+            noteDesc.textContent = 'From the item master. Change it and the '
+                                 + 'item master is updated everywhere.';
             noteUnit.textContent = data.unit_short_name
                 ? 'From the item master.'
                 : 'This item has no unit. It cannot take a conversion factor until one is set.';
             noteUnit.style.color = data.unit_short_name ? '#64748b' : '#8a5b12';
-            noteMpn.textContent  = 'From the item master.';
+            noteMpn.textContent  = 'From the item master. Change it and the '
+                                 + 'item master is updated everywhere.';
         } else {
             noteDesc.textContent = '';
             noteUnit.textContent = 'Only units that already exist. An item saved without one ' +

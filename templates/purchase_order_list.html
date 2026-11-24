@@ -18,9 +18,9 @@
 
 <div class="filter-bar" style="margin-bottom: 20px;">
     <form method="get" action="/purchase-order" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <input type="text" name="search" placeholder="Search PO number, vendor, status..."
-               value="{{ search }}" class="search-input" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px; width: 280px;">
-        <select name="status" class="filter-select" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px;">
+        <input type="text" name="search" placeholder="Search POs"
+               value="{{ search }}" class="search-input">
+        <select name="status" class="filter-select search-input">
             <option value="">All Statuses</option>
             <option value="Draft" {% if status_filter == 'Draft' %}selected{% endif %}>Draft</option>
             <option value="Open" {% if status_filter == 'Open' %}selected{% endif %}>Open</option>
@@ -60,7 +60,7 @@
                 <td>{{ po.date_raised or '—' }}</td>
                 <td>{{ po.raised_by or '—' }}</td>
                 <td>
-                    <span class="badge {% if po.po_status == 'Draft' %}badge-reopened{% elif po.po_status == 'Open' %}badge-open{% elif po.po_status == 'Reviewed' %}badge-inprogress{% elif po.po_status == 'Approved' %}badge-active{% elif po.po_status == 'Cancelled' %}badge-cancelled{% elif po.po_status == 'Closed' %}badge-closed{% else %}badge-open{% endif %}">
+                    <span class="badge {% if po.po_status == 'Draft' %}badge-reopened{% elif po.po_status == 'Open' %}badge-open{% elif po.po_status == 'Reviewed' %}badge-inprogress{% elif po.po_status == 'Approved' %}badge-active{% elif po.po_status == 'Partially Received' %}badge-inprogress{% elif po.po_status == 'Received' %}badge-active{% elif po.po_status == 'Cancelled' %}badge-cancelled{% elif po.po_status == 'Closed' %}badge-closed{% else %}badge-open{% endif %}">
                         {{ po.po_status or 'Open' }}
                     </span>
                 </td>

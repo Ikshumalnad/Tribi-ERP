@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tribi ERP</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=static_v) }}">
     <script>
         // Pre-detect reference mode to prevent screen flickering
         if (window.location.search.includes('reference=1')) {
@@ -14,21 +14,36 @@
 </head>
 <body>
     <nav class="navbar">
-        <a href="/" class="brand">Tribi ERP <span class="brand-version">v{{ app_version }}</span></a>
-        <a href="/bom">BOM</a>
-        <a href="/work-order">Work orders</a>
-        <a href="/grn">GRN</a>
-        <a href="/purchase-order">Purchase orders</a>
-        <a href="/hsn">HSN Details</a>
-        <a href="/issue-transaction">Issue Transaction</a>
-        <a href="/storage">Storage</a>
+        <a href="/" class="brand" title="Tribi ERP">
+            <span class="brand-logo"><img src="{{ url_for('static', filename='logo-nav.png') }}" alt="Tribi"></span>
+            <span class="brand-erp">ERP</span>
+            <span class="brand-version">v{{ app_version }}</span>
+        </a>
+        {#- A section is "selected" for every page under it, so Add Vendor still
+            lights Purchase orders and Unit Conversions still lights Storage. -#}
+        {%- set nav_path = request.path -%}
+        {%- macro nav_link(href, label, prefixes) -%}
+            {%- set ns = namespace(on=false) -%}
+            {%- for p in prefixes -%}
+                {%- if nav_path == p or nav_path.startswith(p ~ '/') or nav_path.startswith(p ~ '-') -%}{%- set ns.on = true -%}{%- endif -%}
+            {%- endfor -%}
+            <a href="{{ href }}" class="nav-link{{ ' is-active' if ns.on }}"{{ ' aria-current="page"'|safe if ns.on }}>{{ label }}</a>
+        {%- endmacro %}
+        {{ nav_link('/bom', 'BOM', ['/bom']) }}
+        {{ nav_link('/work-order', 'Work orders', ['/work-order']) }}
+        {{ nav_link('/grn', 'GRN', ['/grn']) }}
+        {{ nav_link('/purchase-order', 'Purchase orders', ['/purchase-order', '/vendors']) }}
+        {{ nav_link('/hsn', 'HSN Details', ['/hsn']) }}
+        {{ nav_link('/issue-transaction', 'Issue Transaction', ['/issue-transaction', '/issue-transactions']) }}
+        {{ nav_link('/storage', 'Storage', ['/storage', '/unit-conversions']) }}
+        {{ nav_link('/reports', 'Reports', ['/reports']) }}
         <div class="nav-right">
             {% if session.get('user_id') %}
-                <span style="color: rgba(255, 255, 255, 0.7); font-size: 13px; margin-right: 8px;">
-                    👤 {{ session['full_name'] }} ({{ session['role'] | upper }})
+                <span class="nav-user" title="{{ session.get('full_name') or session.get('username') }} ({{ (session.get('role') or '') | upper }}) — signed in as {{ session.get('username') }}">
+                    👤 {{ session.get('full_name') or session.get('username') }} ({{ (session.get('role') or '') | upper }})
                 </span>
-                <a href="/settings" style="padding: 4px 8px;">⚙️ Settings</a>
-                <a href="/logout" style="color: #fca5a5; padding: 4px 8px; font-weight: 600;">Logout</a>
+                {{ nav_link('/settings', '⚙️ Settings', ['/settings']) }}
+                <a href="/logout" class="nav-logout">Logout</a>
             {% else %}
                 Tribi Systems
             {% endif %}
@@ -244,5 +259,17 @@
             }
         });
     </script>
+<script>
+// A number box used to change its value when the mouse wheel or a trackpad
+// swipe passed over it while it had focus -- an easy way to turn 500 into 497
+// without noticing. The wheel now scrolls the page and leaves the number
+// alone; the arrows on the box and the up/down keys still change it.
+document.addEventListener('wheel', function (e) {
+    var el = e.target;
+    if (el && el.tagName === 'INPUT' && el.type === 'number' && el === document.activeElement) {
+        el.blur();
+    }
+}, { passive: true });
+</script>
 </body>
 </html>

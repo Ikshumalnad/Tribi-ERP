@@ -107,7 +107,7 @@
                             <th style="width: 120px;">Item Code</th>
                             <th style="min-width: 170px;">Description</th>
                             <th style="width: 95px;" title="As raised on the purchase order, in the order's unit">Ordered</th>
-                            <th style="width: 120px;" title="What has already happened to this line across every delivery: accepted into stock, awaiting inspection, rejected">So far</th>
+                            <th style="width: 150px;" title="What has already happened to this line across every delivery, added up: accepted into stock, still awaiting QC, rejected at QC">Already received</th>
                             <th style="width: 100px;" title="Ordered minus accepted minus awaiting QC, converted into the unit this item is stocked in">Outstanding</th>
                             <th style="width: 110px;">Receiving <span style="color:red;">*</span></th>
                             <th style="width: 130px;" title="Where this delivery is being put away. Defaults to where the item is kept today; change it if the stock is moving.">Location</th>
@@ -406,7 +406,12 @@ function validateReceivedQuantities(e) {
 function trimNum(v) {
     const n = Number(v);
     if (!isFinite(n)) return v == null ? '' : v;
-    return String(parseFloat(n.toFixed(6)));
+    if (n === 0) return '0';
+    // Display only, same rule as |qty: at most two decimals.
+    let s = n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (Math.abs(n) < 0.0000005) return '0';
+    if (s === '0' || s === '-0') s = n > 0 ? '< 0.01' : '> -0.01';
+    return s;
 }
 
 // Accepted, awaiting and rejected in one cell, and only when they are not
@@ -420,9 +425,9 @@ function progressCell(item) {
         return '<span style="color:#cbd5e1;">nothing yet</span>';
     }
     const bits = [];
-    if (acc) bits.push('<span style="color:#166534; font-weight:600;" title="Accepted into stock">' + trimNum(acc) + ' acc</span>');
-    if (awa) bits.push('<span style="color:#b45309; font-weight:600;" title="Received, awaiting QC">' + trimNum(awa) + ' awa</span>');
-    if (rej) bits.push('<span style="color:#b91c1c; font-weight:600;" title="Rejected at QC">' + trimNum(rej) + ' rej</span>');
+    if (acc) bits.push('<span style="color:#166534; font-weight:600;" title="Passed QC and added to stock">' + trimNum(acc) + ' accepted</span>');
+    if (awa) bits.push('<span style="color:#b45309; font-weight:600;" title="Received but not yet inspected, so not in stock">' + trimNum(awa) + ' in QC</span>');
+    if (rej) bits.push('<span style="color:#b91c1c; font-weight:600;" title="Failed QC, never added to stock">' + trimNum(rej) + ' rejected</span>');
     return bits.join('<br>');
 }
 

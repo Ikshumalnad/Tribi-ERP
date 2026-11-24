@@ -36,9 +36,7 @@
 </div>
 
 <div style="margin-bottom:16px; display:flex; gap:8px; align-items:center;">
-    <span style="font-size:13px; font-weight:600; color:#4a5568;">Search Items:</span>
-    <input type="text" id="bom-item-search" placeholder="Search by item code or description..."
-           style="width:320px; padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; outline:none;">
+    <input class="search-input" type="text" id="bom-item-search" placeholder="Search items">
 </div>
 
 <div class="table-wrapper">
@@ -74,9 +72,9 @@
                 <td>{{ item.mpn or '—' }}</td>
                 <td>{{ item.manufacturer_name or '—' }}</td>
                 <td>{{ item.unit or '—' }}</td>
-                <td>{{ item.qty }}</td>
+                <td>{{ item.qty|qty }}</td>
                 <td style="font-size:12px;">{{ item.patch or '—' }}</td>
-                <td>{{ item.available }}</td>
+                <td>{{ item.available|qty }}</td>
             </tr>
             {% endfor %}
         {% else %}
@@ -103,7 +101,7 @@
         {% set status_info = status_map.get(wo.status, ('Unknown', 'badge-open')) %}
         <tr>
             <td><a href="/work-order/{{ wo.wo_id }}" class="table-link"><strong>{{ wo.wo_number }}</strong></a></td>
-            <td>{{ wo.qty_to_build }}</td>
+            <td>{{ wo.qty_to_build|qty }}</td>
             <td><span class="badge {{ status_info[1] }}">{{ status_info[0] }}</span></td>
             <td><a href="/work-order/{{ wo.wo_id }}" class="btn btn-secondary" style="font-size:12px; padding:4px 10px; text-decoration:none;">View</a></td>
         </tr>

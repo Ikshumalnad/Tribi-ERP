@@ -16,12 +16,12 @@
 
 <div class="filter-bar">
     <form method="get" action="/work-order" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <input type="text" name="search" placeholder="Search by WO number, BOM or description"
+        <input type="text" name="search" placeholder="Search work orders"
                value="{{ search }}" class="search-input">
         <select name="status" class="filter-select">
             <option value="">All statuses</option>
-            {% for k, v in status_map.items() %}
-            <option value="{{ k }}" {% if status_filter == k|string %}selected{% endif %}>{{ v[0] }}</option>
+            {% for k, v in status_choices %}
+            <option value="{{ k }}" {% if status_filter == k|string %}selected{% endif %}>{{ v }}</option>
             {% endfor %}
         </select>
         <label style="display:flex; align-items:center; gap:6px; font-size:14px;">

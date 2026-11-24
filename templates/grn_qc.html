@@ -89,7 +89,7 @@
                         {% endif %}
                     </td>
                     <td style="text-align: right;">
-                        <span id="qty-recv-{{ item.grn_item_id }}">{{ item.qty_received }}</span><span
+                        <span id="qty-recv-{{ item.grn_item_id }}" data-qty="{{ item.qty_received }}">{{ item.qty_received|qty }}</span><span
                               style="color: #64748b; font-size: 12px;"> {{ item.item_unit or '' }}</span>
                     </td>
                     <td style="text-align: right;">
@@ -107,7 +107,7 @@
                               style="color: #64748b; font-size: 12px;"> {{ item.item_unit or '' }}</span>
                     </td>
                     <td style="text-align: right;">
-                        <span id="qty-pend-{{ item.grn_item_id }}" style="font-weight: 700; color: #2563eb;">{{ '%.6f'|format(pend if pend > 0 else 0.0) }}</span><span
+                        <span id="qty-pend-{{ item.grn_item_id }}" style="font-weight: 700; color: #2563eb;">{{ (pend if pend > 0 else 0)|qty }}</span><span
                             style="color: #64748b; font-size: 12px; font-weight: 400;"> {{ item.item_unit or '' }}</span>
                     </td>
                     <td style="text-align: right;">
@@ -168,8 +168,18 @@
 </form>
 
 <script>
+// Same rounding as the |qty filter: at most two decimals, display only.
+function fmtQty(v) {
+    const n = Number(v);
+    if (!isFinite(n)) return String(v);
+    if (n === 0) return '0';
+    let s = n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (Math.abs(n) < 0.0000005) return '0';
+    if (s === '0' || s === '-0') s = n > 0 ? '< 0.01' : '> -0.01';
+    return s;
+}
 function calculateQCStatus(itemId) {
-    const recvVal = parseFloat(document.getElementById('qty-recv-' + itemId).innerText) || 0;
+    const recvVal = parseFloat(document.getElementById('qty-recv-' + itemId).dataset.qty) || 0;
     const accField = document.getElementById('qty-acc-' + itemId);
     const rejField = document.getElementById('qty-rej-' + itemId);
     const pendSpan = document.getElementById('qty-pend-' + itemId);
@@ -192,11 +202,11 @@ function calculateQCStatus(itemId) {
     }
     
     const pendVal = Math.max(0, recvVal - accVal - rejVal);
-    pendSpan.innerText = parseFloat(pendVal.toFixed(6));
+    pendSpan.innerText = fmtQty(pendVal);
 }
 
 function calculateQCStatusReversed(itemId) {
-    const recvVal = parseFloat(document.getElementById('qty-recv-' + itemId).innerText) || 0;
+    const recvVal = parseFloat(document.getElementById('qty-recv-' + itemId).dataset.qty) || 0;
     const accField = document.getElementById('qty-acc-' + itemId);
     const rejField = document.getElementById('qty-rej-' + itemId);
     const pendSpan = document.getElementById('qty-pend-' + itemId);
@@ -219,7 +229,7 @@ function calculateQCStatusReversed(itemId) {
     }
     
     const pendVal = Math.max(0, recvVal - accVal - rejVal);
-    pendSpan.innerText = parseFloat(pendVal.toFixed(6));
+    pendSpan.innerText = fmtQty(pendVal);
 }
 </script>
 {% endblock %}

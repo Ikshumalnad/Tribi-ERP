@@ -24,9 +24,8 @@
 
 <div class="filter-bar" style="margin-bottom: 20px;">
     <form method="get" action="/grn" id="grnFilterForm" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-        <input type="text" name="search" placeholder="Search GRN / invoice..."
-               value="{{ search }}" class="search-input" style="min-width: 170px;">
-        <select name="grn_type" class="filter-select">
+        <input type="text" name="search" placeholder="Search GRNs" value="{{ search }}" class="search-input">
+        <select name="grn_type" class="filter-select search-input">
             <option value="">All Types</option>
             <option value="0" {% if type_filter == '0' %}selected{% endif %}>Purchase</option>
             <option value="1" {% if type_filter == '1' %}selected{% endif %}>Back To Store</option>
@@ -40,14 +39,7 @@
         <div style="position: relative; flex: 1; min-width: 280px;" id="itemSearchContainer">
             <input type="hidden" name="item_id" id="selectedItemId" value="{{ selected_item.item_id if selected_item else '' }}">
             <div style="display: flex; align-items: center; position: relative;">
-                <input type="text" 
-                       name="item_search" 
-                       id="itemSearchInput" 
-                       placeholder="🔍 Search Item Code / Desc predictions..." 
-                       value="{% if selected_item %}{{ selected_item.item_code }}{% else %}{{ item_search }}{% endif %}" 
-                       class="search-input" 
-                       style="width: 100%; padding-right: 28px; font-weight: 600;"
-                       autocomplete="off">
+                <input style="width: 100%; padding-right: 36px;" type="text" name="item_search" id="itemSearchInput" placeholder="Filter by item" value="{% if selected_item %}{{ selected_item.item_code }}{% else %}{{ item_search }}{% endif %}" class="search-input" autocomplete="off">
                 <button type="button" id="clearItemInputBtn" onclick="clearItemSearch()" 
                         style="display: {% if selected_item or item_search %}block{% else %}none{% endif %}; position: absolute; right: 8px; background: none; border: none; font-size: 14px; color: #94a3b8; cursor: pointer;">✕</button>
             </div>
@@ -97,15 +89,15 @@
             {% if item_stats %}
             <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 105px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
                 <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">Total Recv Qty</div>
-                <div style="font-size: 20px; font-weight: 800; color: #0f172a;">{{ item_stats.total_received }}</div>
+                <div style="font-size: 20px; font-weight: 800; color: #0f172a;">{{ item_stats.total_received|qty }}</div>
             </div>
             <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 95px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
                 <div style="font-size: 11px; color: #16a34a; font-weight: 600; text-transform: uppercase;">Accepted</div>
-                <div style="font-size: 18px; font-weight: 700; color: #16a34a;">{{ item_stats.total_accepted }}</div>
+                <div style="font-size: 18px; font-weight: 700; color: #16a34a;">{{ item_stats.total_accepted|qty }}</div>
             </div>
             <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 95px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
                 <div style="font-size: 11px; color: #dc2626; font-weight: 600; text-transform: uppercase;">Rejected</div>
-                <div style="font-size: 18px; font-weight: 700; color: #dc2626;">{{ item_stats.total_rejected }}</div>
+                <div style="font-size: 18px; font-weight: 700; color: #dc2626;">{{ item_stats.total_rejected|qty }}</div>
             </div>
             {% endif %}
             <a href="/grn{% if type_filter != '' %}?grn_type={{ type_filter }}{% if search %}&search={{ search }}{% endif %}{% elif search %}?search={{ search }}{% endif %}" 
@@ -149,7 +141,7 @@
                 </td>
                 <td>{{ g.invoice_no or '—' }}</td>
                 {% if selected_item %}
-                <td style="background: #f8fafc;"><strong style="color: #2563eb; font-size: 14px;">{{ g.specific_item_qty }} {{ selected_item.unit or '' }}</strong></td>
+                <td style="background: #f8fafc;"><strong style="color: #2563eb; font-size: 14px;">{{ g.specific_item_qty|qty }} {{ selected_item.unit or '' }}</strong></td>
                 {% endif %}
                 <td>
                     {% if g.grn_status and g.grn_status != '—' %}

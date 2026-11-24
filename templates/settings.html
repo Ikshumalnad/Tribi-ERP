@@ -85,6 +85,41 @@
     </form>
 </div>
 
+<!-- Document Numbering Card -->
+<div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; margin-bottom: 28px; box-shadow: 0 2px 4px rgba(0,0,0,0.03);">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+        <div>
+            <h3 style="font-size: 16px; font-weight: 600; color: #1a2e4a; margin-bottom: 4px;">
+                🔢 Document Numbering
+            </h3>
+            <p style="font-size: 13px; color: #64748b; margin: 0;">
+                Where Purchase Order, GRN and Work Order numbers start, and how they are written.
+            </p>
+        </div>
+        {% if session.get('role') == 'admin' %}
+        <button type="button" class="btn btn-primary" onclick="openNumberingModal()">✏️ Edit numbering</button>
+        {% endif %}
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+        {% for label, n in [('Purchase orders', numbering.po), ('GRNs', numbering.grn), ('Work orders', numbering.wo)] %}
+        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px;">
+            <div style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;">{{ label }}</div>
+            <table style="width:100%; font-size: 13px;">
+                <tr><td style="color:#64748b; padding:3px 0; width:110px;">Format</td>
+                    <td><code style="background:#f1f5f9; padding:2px 6px; border-radius:4px;">{{ n.format }}</code>
+                        <span style="color:#94a3b8;">· {{ n.pad }} digits</span></td></tr>
+                <tr><td style="color:#64748b; padding:3px 0;">Starts from</td>
+                    <td>{{ n.start }}
+                        {% if n.highest %}<span style="color:#94a3b8;">· highest used {{ n.highest }}</span>{% endif %}</td></tr>
+                <tr><td style="color:#64748b; padding:3px 0;">Next number</td>
+                    <td><strong style="font-size: 15px; color:#0f172a;">{{ n.next }}</strong></td></tr>
+            </table>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <!-- Policy Number & Insurance Configuration Card -->
 <div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; margin-bottom: 28px; box-shadow: 0 2px 4px rgba(0,0,0,0.03);">
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
@@ -229,6 +264,214 @@
     </div>
     
 </div>
+
+<!-- Document Numbering Modal -->
+<div id="numberingModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center; backdrop-filter: blur(2px);">
+    <div style="background:#fff; border-radius:12px; padding:28px; width:620px; max-width:94%; max-height:92vh; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 18px;">
+            <h3 style="font-size:16px; font-weight:700; color:#1a2e4a; margin:0;">🔢 Document Numbering</h3>
+            <button type="button" onclick="closeNumberingModal()" style="background:none; border:none; font-size:20px; cursor:pointer; color:#64748b;">✕</button>
+        </div>
+
+        <form method="POST" action="/settings/numbering" id="numberingForm">
+
+            <!-- Purchase orders -->
+            <div style="font-size:13px; font-weight:700; color:#1a2e4a; margin-bottom:10px;">Purchase orders</div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-weight:600; font-size:13px;">Start {{ numbering.po.fy_span }} from</label>
+                    <input type="number" min="1" step="1" name="po_start" id="po_start" required
+                           value="{{ numbering.po.start }}" class="input-field" style="width:100%;" oninput="numberingPreview()">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-weight:600; font-size:13px;">Digits</label>
+                    <input type="number" min="1" max="8" step="1" name="po_pad" id="po_pad" required
+                           value="{{ numbering.po.pad }}" class="input-field" style="width:100%;" oninput="numberingPreview()">
+                </div>
+            </div>
+            <div class="form-group" style="margin:12px 0 0;">
+                <label style="font-weight:600; font-size:13px;">Format</label>
+                <input type="text" name="po_format" id="po_format" required maxlength="40"
+                       value="{{ numbering.po.format }}" class="input-field" style="width:100%; font-family:monospace;" oninput="numberingPreview()">
+            </div>
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                Numbering starts from exactly this number. A new format applies to POs raised from today; older POs keep the number they were sent with.
+            </div>
+            <div style="margin-top:8px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                Next PO will read: <strong id="po_preview" style="font-family:monospace; font-size:14px;"></strong>
+                <div id="po_problem" style="color:#b91c1c; font-size:12px; margin-top:4px;"></div>
+                <div id="po_note" style="display:none; margin-top:6px; padding:6px 8px; background:#fffbeb; border:1px solid #fde68a; border-radius:4px; color:#92400e; font-size:12px;"></div>
+            </div>
+
+            <!-- GRNs -->
+            <div style="font-size:13px; font-weight:700; color:#1a2e4a; margin:22px 0 10px; padding-top:16px; border-top:1px solid #e2e8f0;">GRNs</div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-weight:600; font-size:13px;">Start {{ numbering.grn.year }} from</label>
+                    <input type="number" min="1" step="1" name="grn_start" id="grn_start" required
+                           value="{{ numbering.grn.start }}" class="input-field" style="width:100%;" oninput="numberingPreview()">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-weight:600; font-size:13px;">Digits</label>
+                    <input type="number" min="1" max="8" step="1" name="grn_pad" id="grn_pad" required
+                           value="{{ numbering.grn.pad }}" class="input-field" style="width:100%;" oninput="numberingPreview()">
+                </div>
+            </div>
+            <div class="form-group" style="margin:12px 0 0;">
+                <label style="font-weight:600; font-size:13px;">Format</label>
+                <input type="text" name="grn_format" id="grn_format" required maxlength="40"
+                       value="{{ numbering.grn.format }}" class="input-field" style="width:100%; font-family:monospace;" oninput="numberingPreview()">
+            </div>
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                Numbering starts from exactly this number. Older GRNs keep their numbers.
+            </div>
+            <div style="margin-top:8px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                Next GRN will read: <strong id="grn_preview" style="font-family:monospace; font-size:14px;"></strong>
+                <div id="grn_problem" style="color:#b91c1c; font-size:12px; margin-top:4px;"></div>
+                <div id="grn_note" style="display:none; margin-top:6px; padding:6px 8px; background:#fffbeb; border:1px solid #fde68a; border-radius:4px; color:#92400e; font-size:12px;"></div>
+            </div>
+
+            <!-- Work orders -->
+            <div style="font-size:13px; font-weight:700; color:#1a2e4a; margin:22px 0 10px; padding-top:16px; border-top:1px solid #e2e8f0;">Work orders</div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-weight:600; font-size:13px;">Start {{ numbering.wo.year }} from</label>
+                    <input type="number" min="1" step="1" name="wo_start" id="wo_start" required
+                           value="{{ numbering.wo.start }}" class="input-field" style="width:100%;" oninput="numberingPreview()">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-weight:600; font-size:13px;">Digits</label>
+                    <input type="number" min="1" max="8" step="1" name="wo_pad" id="wo_pad" required
+                           value="{{ numbering.wo.pad }}" class="input-field" style="width:100%;" oninput="numberingPreview()">
+                </div>
+            </div>
+            <div class="form-group" style="margin:12px 0 0;">
+                <label style="font-weight:600; font-size:13px;">Format</label>
+                <input type="text" name="wo_format" id="wo_format" required maxlength="40"
+                       value="{{ numbering.wo.format }}" class="input-field" style="width:100%; font-family:monospace;" oninput="numberingPreview()">
+            </div>
+            <div style="font-size:12px; color:#64748b; margin-top:6px;">
+                Numbering starts from exactly this number. Digits 1 means no padding — 2537 stays 2537. Older work orders keep their numbers.
+            </div>
+            <div style="margin-top:8px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                Next work order will read: <strong id="wo_preview" style="font-family:monospace; font-size:14px;"></strong>
+                <div id="wo_problem" style="color:#b91c1c; font-size:12px; margin-top:4px;"></div>
+                <div id="wo_note" style="display:none; margin-top:6px; padding:6px 8px; background:#fffbeb; border:1px solid #fde68a; border-radius:4px; color:#92400e; font-size:12px;"></div>
+            </div>
+
+            <!-- Placeholders -->
+            <div style="margin-top:18px; font-size:12px; color:#475569; line-height:1.8; background:#fffbeb; border:1px solid #fde68a; border-radius:6px; padding:10px 12px;">
+                <strong>Placeholders</strong><br>
+                <code>{seq}</code> the running number — required, once &nbsp;·&nbsp;
+                <code>{fy}</code> {{ numbering.fy }} &nbsp;·&nbsp;
+                <code>{fy_start}</code> {{ numbering.po.ctx.fy_start }} &nbsp;·&nbsp;
+                <code>{year}</code> year &nbsp;·&nbsp;
+                <code>{ver}</code> PO amendment number (PO only)
+            </div>
+
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+                <button type="button" class="btn-outline" onclick="closeNumberingModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="numberingSave">Save numbering</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+const NUMBERING = {{ {
+    'po':  {'ctx': numbering.po.ctx,  'tokens': numbering.tokens.po,  'format': numbering.po.format,
+            'pad': numbering.po.pad,  'start': numbering.po.start,  'next_seq': numbering.po.next_seq,
+            'taken': numbering.po.taken,  'restarted': numbering.po.restarted, 'series_by_format': false},
+    'grn': {'ctx': numbering.grn.ctx, 'tokens': numbering.tokens.grn, 'format': numbering.grn.format,
+            'pad': numbering.grn.pad, 'start': numbering.grn.start, 'next_seq': numbering.grn.next_seq,
+            'taken': numbering.grn.taken, 'restarted': numbering.grn.restarted, 'series_by_format': true},
+    'wo':  {'ctx': numbering.wo.ctx,  'tokens': numbering.tokens.wo,  'format': numbering.wo.format,
+            'pad': numbering.wo.pad,  'start': numbering.wo.start,  'next_seq': numbering.wo.next_seq,
+            'taken': numbering.wo.taken,  'restarted': numbering.wo.restarted, 'series_by_format': true}
+} | tojson }};
+
+// The same rules the server applies on save, so a mistake shows while typing
+// rather than after a round trip. The server still checks; this only warns.
+function numberingProblems(fmt, pad, tokens) {
+    const found = [...fmt.matchAll(/\{([^{}]*)\}/g)].map(m => m[1]);
+    const out = [];
+    if (!fmt.trim()) out.push('The format cannot be empty.');
+    if (found.filter(t => t === 'seq').length !== 1) out.push('Needs {seq} exactly once.');
+    const unknown = [...new Set(found.filter(t => !tokens.includes(t)))];
+    if (unknown.length) out.push('Not understood: ' + unknown.map(t => '{' + t + '}').join(', '));
+    if (/[{}]/.test(fmt.replace(/\{[^{}]*\}/g, ''))) out.push('A brace is not closed.');
+    if (!(pad >= 1 && pad <= 8)) out.push('Digits must be 1 to 8.');
+    return out;
+}
+
+function renderNumber(fmt, pad, seq, ctx) {
+    const vals = Object.assign({}, ctx, { seq: String(seq).padStart(pad, '0') });
+    return fmt.replace(/\{(\w+)\}/g, (m, k) => (k in vals ? String(vals[k]) : m));
+}
+
+// Mirrors next_in_series / generate_po_number on the server:
+//   a start number that is new, or never applied, restarts numbering from it;
+//   the same start number already running carries on where it is;
+//   a number already used is skipped, never reissued.
+function nextSeq(k, fmt, start) {
+    const N = NUMBERING[k];
+    const sameSeries = !N.series_by_format || fmt === N.format;
+    const taken = new Set(sameSeries ? N.taken : []);
+    if (sameSeries && N.restarted && start === N.start) return { seq: N.next_seq, taken: taken };
+    let seq = Math.max(1, start);
+    while (taken.has(seq)) seq++;
+    return { seq: seq, taken: taken };
+}
+
+function describeAhead(nums) {
+    if (nums.length === 1) return String(nums[0]);
+    if (nums[nums.length - 1] - nums[0] + 1 === nums.length) return nums[0] + '\u2013' + nums[nums.length - 1];
+    return nums.length + ' numbers between ' + nums[0] + ' and ' + nums[nums.length - 1];
+}
+
+function numberingPreview() {
+    let ok = true;
+    ['po', 'grn', 'wo'].forEach(function (k) {
+        const fmt = document.getElementById(k + '_format').value;
+        const pad = parseInt(document.getElementById(k + '_pad').value, 10);
+        const start = parseInt(document.getElementById(k + '_start').value, 10) || 1;
+        const prob = numberingProblems(fmt, pad, NUMBERING[k].tokens);
+        const r = nextSeq(k, fmt, start);
+
+        document.getElementById(k + '_preview').textContent =
+            prob.length ? '\u2014' : renderNumber(fmt, pad, r.seq, NUMBERING[k].ctx);
+        document.getElementById(k + '_problem').textContent = prob.join(' ');
+
+        const note = document.getElementById(k + '_note');
+        const ahead = [...r.taken].filter(n => n >= start).sort((a, b) => a - b);
+        let msg = '';
+        if (!prob.length && r.seq !== start && ahead.length && ahead[0] === start) {
+            msg = start + ' is already used, so the next will be ' + r.seq + '. ';
+        }
+        const later = ahead.filter(n => n > r.seq);
+        if (!prob.length && later.length) {
+            msg += describeAhead(later) + ' already used this year \u2014 skipped when the count reaches '
+                + (later.length === 1 ? 'it' : 'them') + '.';
+        }
+        note.textContent = msg;
+        note.style.display = msg ? 'block' : 'none';
+        ok = ok && !prob.length;
+    });
+    document.getElementById('numberingSave').disabled = !ok;
+}
+
+function openNumberingModal() {
+    document.getElementById('numberingModal').style.display = 'flex';
+    numberingPreview();
+}
+function closeNumberingModal() {
+    document.getElementById('numberingModal').style.display = 'none';
+}
+{% if request.args.get('numbering') == 'open' %}
+document.addEventListener('DOMContentLoaded', openNumberingModal);
+{% endif %}
+</script>
+
 
 <!-- Edit User Modal -->
 <div id="editUserModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center; backdrop-filter: blur(2px);">

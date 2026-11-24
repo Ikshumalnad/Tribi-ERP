@@ -7,13 +7,17 @@
     <div style="width: 260px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); display: flex; flex-direction: column; gap: 24px; min-height: 380px;">
         <div style="text-align: center; border-bottom: 1px solid #edf2f7; padding-bottom: 20px;">
             <div style="width: 72px; height: 72px; border-radius: 50%; background: #1a2e4a; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 12px auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-                {{ session['full_name'][0] | upper if session['full_name'] else 'U' }}
+                {%- set display_name = session.get('full_name') or session.get('username') or 'User' -%}
+                {{ display_name[0] | upper }}
             </div>
-            <h3 style="font-size: 16px; font-weight: 600; color: #1a2e4a; margin-bottom: 4px;">
-                {{ session['full_name'] or 'User' }}
+            <h3 style="font-size: 16px; font-weight: 600; color: #1a2e4a; margin-bottom: 2px;">
+                {{ display_name }}
             </h3>
+            {% if session.get('username') %}
+            <div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">@{{ session.get('username') }}</div>
+            {% endif %}
             <span style="font-size: 11px; font-weight: 600; color: #4a5568; background: #edf2f7; padding: 3px 10px; border-radius: 12px; text-transform: uppercase; letter-spacing: 0.5px;">
-                {{ session['role'] or 'Staff' }}
+                {{ role_label }}
             </span>
         </div>
 
@@ -43,10 +47,60 @@
 
     <!-- Main Content Area -->
     <div style="flex: 1; min-width: 320px;">
-        <div class="greeting">
-            <h1>Good morning, {{ session['full_name'] or 'User' }}</h1>
-            <p>Tribi Systems Pvt. Ltd. &nbsp;·&nbsp; Bengaluru</p>
+        {#- The server's clock gives a first guess; the script below replaces
+            it with the time on the person's own computer, which is what
+            "morning" means to them. -#}
+        {%- set part = {'Good morning': 'morning', 'Good afternoon': 'afternoon'}.get(greeting, 'evening') -%}
+        <div class="greet-card" id="greetCard" data-part="{{ part }}">
+            <div class="greet-icon" aria-hidden="true">
+                <svg class="ico ico-morning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 18a5 5 0 0 0-10 0"/><line x1="12" y1="2" x2="12" y2="9"/><line x1="4.22" y1="10.22" x2="5.64" y2="11.64"/><line x1="1" y1="18" x2="3" y2="18"/><line x1="21" y1="18" x2="23" y2="18"/><line x1="18.36" y1="11.64" x2="19.78" y2="10.22"/><line x1="23" y1="22" x2="1" y2="22"/><polyline points="8 6 12 2 16 6"/>
+                </svg>
+                <svg class="ico ico-afternoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="4.5"/><line x1="12" y1="1.5" x2="12" y2="3.5"/><line x1="12" y1="20.5" x2="12" y2="22.5"/><line x1="4.57" y1="4.57" x2="5.99" y2="5.99"/><line x1="18.01" y1="18.01" x2="19.43" y2="19.43"/><line x1="1.5" y1="12" x2="3.5" y2="12"/><line x1="20.5" y1="12" x2="22.5" y2="12"/><line x1="4.57" y1="19.43" x2="5.99" y2="18.01"/><line x1="18.01" y1="5.99" x2="19.43" y2="4.57"/>
+                </svg>
+                <svg class="ico ico-evening" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+            </div>
+            <div class="greet-text">
+                <div class="greet-hello"><span id="greetingText">{{ greeting }}</span>,</div>
+                <h1 class="greet-name">{{ session.get('full_name') or session.get('username') or 'User' }}</h1>
+                <div class="greet-org">Tribi Systems Pvt. Ltd. <span class="dot">·</span> Bengaluru</div>
+            </div>
+            <div class="greet-when">
+                <div class="greet-day" id="greetDay">{{ now.strftime('%A') }}</div>
+                <div class="greet-date" id="greetDate">{{ now.strftime('%d %b %Y').lstrip('0') }}</div>
+                <div class="greet-time" id="greetTime">{{ now.strftime('%I:%M %p').lstrip('0') }}</div>
+            </div>
         </div>
+        <script>
+            (function () {
+                function partFor(h) {
+                    if (h >= 5 && h < 12) return 'morning';
+                    if (h >= 12 && h < 17) return 'afternoon';
+                    return 'evening';
+                }
+                var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                var DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                function update() {
+                    var d = new Date(), part = partFor(d.getHours());
+                    var card = document.getElementById('greetCard');
+                    if (!card) return;
+                    card.setAttribute('data-part', part);
+                    document.getElementById('greetingText').textContent =
+                        'Good ' + part;
+                    document.getElementById('greetDay').textContent = DAYS[d.getDay()];
+                    document.getElementById('greetDate').textContent =
+                        d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+                    var h = d.getHours() % 12 || 12, m = String(d.getMinutes()).padStart(2, '0');
+                    document.getElementById('greetTime').textContent =
+                        h + ':' + m + ' ' + (d.getHours() < 12 ? 'AM' : 'PM');
+                }
+                update();
+                setInterval(update, 30000);   // a page left open over lunch changes too
+            })();
+        </script>
 
         <div class="module-grid">
             <div class="module-card">
@@ -58,8 +112,8 @@
                         <div class="value">{{ wo_open }}</div>
                     </div>
                     <div class="stat">
-                        <div class="label">In progress</div>
-                        <div class="value warn">{{ wo_inprogress }}</div>
+                        <div class="label">Closed</div>
+                        <div class="value">{{ wo_closed }}</div>
                     </div>
                 </div>
                 <a href="/work-order" class="go-btn">Open work orders →</a>

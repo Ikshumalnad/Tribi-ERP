@@ -93,7 +93,7 @@
                 </label>
                 <div id="termsContainerAdd" style="display: none; margin-top: 10px;">
                     <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Custom Terms (one per line):</label>
-                    <textarea name="custom_terms" id="customTermsTextarea" rows="6" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; font-family: sans-serif; resize: vertical; box-sizing: border-box;"></textarea>
+                    <textarea name="custom_terms" id="customTermsTextarea" rows="6" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; resize: vertical; box-sizing: border-box;"></textarea>
                 </div>
             </div>
 
@@ -233,6 +233,49 @@ const hsnData = {{ hsns | tojson }};
 const currencySymbolsByCode = {'INR':'\u20b9','USD':'$','EUR':'\u20ac','GBP':'\u00a3','AED':'\u062f.\u0625','MYR':'RM'};
 let currencyTouched = false;
 
+// -- THE ITEM CATALOGUE, HELD ONCE FOR THE WHOLE PAGE -----------------
+//
+// Every PO line used to get a <select> carrying all 4,400+ items. Ten lines
+// meant 44,000 <option> nodes in the document, and each row then walked its
+// own copy of them again to build its search list. Cloning them was cheap;
+// having them there at all was not.
+//
+// The search list is now built once, here, from data the page already has.
+// A row's <select> starts empty apart from the placeholder and is given
+// exactly one <option> -- the item that was chosen. It still submits
+// item_id[] and still carries data-unit-id, so nothing downstream changes.
+const ITEM_CHOICES = allItems.map(function (it) {
+    const label = it.item_code + ' \u2014 ' + (it.desc || '');
+    return {
+        value: String(it.item_id),
+        text: label,
+        lower: label.toLowerCase(),
+        unitId: it.unit_id == null ? '' : it.unit_id
+    };
+});
+const ITEM_CHOICE_BY_ID = {};
+ITEM_CHOICES.forEach(function (c) { ITEM_CHOICE_BY_ID[c.value] = c; });
+
+// Gives a row's <select> the one option it needs, if it has not got it yet.
+// Called before anything sets .value, because setting a value that no
+// <option> carries would silently leave the select empty.
+function ensureItemOption(selectEl, itemId) {
+    const key = String(itemId == null ? '' : itemId);
+    if (!key) return null;
+    const existing = selectEl.options;
+    for (let i = 0; i < existing.length; i++) {
+        if (existing[i].value === key) return existing[i];
+    }
+    const choice = ITEM_CHOICE_BY_ID[key];
+    if (!choice) return null;
+    const opt = document.createElement('option');
+    opt.value = choice.value;
+    opt.textContent = choice.text;
+    opt.setAttribute('data-unit-id', choice.unitId);
+    selectEl.appendChild(opt);
+    return opt;
+}
+
 // Map item_id to vendors who supply it
 const itemVendorsData = {};
 allVendors.forEach(vendor => {
@@ -320,12 +363,19 @@ function initSearchableSelect(selectEl, placeholder = "Search...") {
     let choices = [];
 
     function refreshOptions() {
-        choices = [];
-        const options = selectEl.options;
-        for (let i = 0; i < options.length; i++) {
-            const opt = options[i];
-            if (opt.value === "") continue;   // skip placeholder
-            choices.push({ value: opt.value, text: opt.text, lower: opt.text.toLowerCase() });
+        // The item picker reads the page-wide catalogue. Every other
+        // searchable select (vendor, unit) still reads its own options,
+        // which are few and are the only place that data lives.
+        if (selectEl.name === 'item_id[]') {
+            choices = ITEM_CHOICES;
+        } else {
+            choices = [];
+            const options = selectEl.options;
+            for (let i = 0; i < options.length; i++) {
+                const opt = options[i];
+                if (opt.value === "") continue;   // skip placeholder
+                choices.push({ value: opt.value, text: opt.text, lower: opt.text.toLowerCase() });
+            }
         }
 
         dropdown.innerHTML = '';
@@ -400,6 +450,9 @@ function initSearchableSelect(selectEl, placeholder = "Search...") {
         if (!item) return;
         e.stopPropagation();
 
+        if (selectEl.name === 'item_id[]') {
+            ensureItemOption(selectEl, item.dataset.value);
+        }
         selectEl.value = item.dataset.value;
         input.value = item.textContent;
         dropdown.style.display = 'none';
@@ -520,14 +573,8 @@ function makeItemSelect() {
         placeholder.value = '';
         placeholder.textContent = '— Select Item —';
         itemSelectTemplate.appendChild(placeholder);
-
-        allItems.forEach(item => {
-            const opt = document.createElement('option');
-            opt.value = item.item_id;
-            opt.textContent = item.item_code + ' — ' + (item.desc || '');
-            opt.setAttribute('data-unit-id', item.unit_id == null ? '' : item.unit_id);
-            itemSelectTemplate.appendChild(opt);
-        });
+        // No catalogue here any more. ensureItemOption adds the one option a
+        // row actually needs, at the moment it needs it.
     }
     return itemSelectTemplate.cloneNode(true);
 }
@@ -624,7 +671,7 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
         <td>
             <div style="display: flex; align-items: center; gap: 4px;">
                 <span class="currency-symbol" style="font-weight: bold; color: #4a5568;">${symbol}</span>
-                <input type="number" name="unit_price[]" step="0.001" min="0.000" required value="${price}" placeholder="0.000" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                <input type="number" name="unit_price[]" step="0.0001" min="0" required value="${price}" placeholder="0.0000" title="Up to 4 decimal places" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
             </div>
         </td>
         <td>
@@ -641,7 +688,10 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
     // Building that markup used to mean a 4,400-iteration loop and a ~300 KB
     // string for every row added. It is built once now and cloned.
     const itemSelect = makeItemSelect();
-    if (itemId) itemSelect.value = String(itemId);
+    if (itemId) {
+        ensureItemOption(itemSelect, itemId);
+        itemSelect.value = String(itemId);
+    }
     tr.querySelector('.item-select-cell').appendChild(itemSelect);
 
     tbody.appendChild(tr);

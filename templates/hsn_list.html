@@ -24,7 +24,7 @@
 {% endwith %}
 
 <form method="GET" action="/hsn" class="search-bar">
-    <input type="text" name="search" value="{{ search }}" placeholder="Search HSN Code or Description...">
+    <input class="search-input" type="text" name="search" value="{{ search }}" placeholder="Search HSN">
     <button type="submit" class="btn btn-secondary">Search</button>
     {% if search %}
         <a href="/hsn" class="btn btn-secondary" style="background:#e2e8f0; color:#475569;">Clear</a>

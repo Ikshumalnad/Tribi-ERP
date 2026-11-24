@@ -66,6 +66,8 @@
                     <option value="Open" {% if po.po_status == 'Open' %}selected{% endif %}>Open</option>
                     <option value="Reviewed" {% if po.po_status == 'Reviewed' %}selected{% endif %}>Reviewed</option>
                     <option value="Approved" {% if po.po_status == 'Approved' %}selected{% endif %}>Approved</option>
+                    <option value="Partially Received" {% if po.po_status == 'Partially Received' %}selected{% endif %}>Partially Received</option>
+                    <option value="Received" {% if po.po_status == 'Received' %}selected{% endif %}>Received</option>
                     <option value="Closed" {% if po.po_status == 'Closed' %}selected{% endif %}>Closed</option>
                     <option value="Cancelled" {% if po.po_status == 'Cancelled' %}selected{% endif %}>Cancelled</option>
                 </select>
@@ -161,7 +163,7 @@
                 </label>
                 <div id="termsContainerEdit" style="display: {% if po.custom_terms %}block{% else %}none{% endif %}; margin-top: 10px;">
                     <label style="display: block; font-size: 12px; color: #475569; margin-bottom: 4px;">Custom Terms (one per line):</label>
-                    <textarea name="custom_terms" id="customTermsTextareaEdit" rows="6" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; font-family: sans-serif; resize: vertical; box-sizing: border-box;">{{ po.custom_terms or '' }}</textarea>
+                    <textarea name="custom_terms" id="customTermsTextareaEdit" rows="6" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; resize: vertical; box-sizing: border-box;">{{ po.custom_terms or '' }}</textarea>
                 </div>
             </div>
 
@@ -310,6 +312,49 @@ function updatePaymentTermsHiddenEdit() {
 
 <script>
 const allItems = {{ items | tojson }};
+
+// -- THE ITEM CATALOGUE, HELD ONCE FOR THE WHOLE PAGE -----------------
+//
+// Every PO line used to get a <select> carrying all 4,400+ items. Ten lines
+// meant 44,000 <option> nodes in the document, and each row then walked its
+// own copy of them again to build its search list. Cloning them was cheap;
+// having them there at all was not.
+//
+// The search list is now built once, here, from data the page already has.
+// A row's <select> starts empty apart from the placeholder and is given
+// exactly one <option> -- the item that was chosen. It still submits
+// item_id[] and still carries data-unit-id, so nothing downstream changes.
+const ITEM_CHOICES = allItems.map(function (it) {
+    const label = it.item_code + ' \u2014 ' + (it.desc || '');
+    return {
+        value: String(it.item_id),
+        text: label,
+        lower: label.toLowerCase(),
+        unitId: it.unit_id == null ? '' : it.unit_id
+    };
+});
+const ITEM_CHOICE_BY_ID = {};
+ITEM_CHOICES.forEach(function (c) { ITEM_CHOICE_BY_ID[c.value] = c; });
+
+// Gives a row's <select> the one option it needs, if it has not got it yet.
+// Called before anything sets .value, because setting a value that no
+// <option> carries would silently leave the select empty.
+function ensureItemOption(selectEl, itemId) {
+    const key = String(itemId == null ? '' : itemId);
+    if (!key) return null;
+    const existing = selectEl.options;
+    for (let i = 0; i < existing.length; i++) {
+        if (existing[i].value === key) return existing[i];
+    }
+    const choice = ITEM_CHOICE_BY_ID[key];
+    if (!choice) return null;
+    const opt = document.createElement('option');
+    opt.value = choice.value;
+    opt.textContent = choice.text;
+    opt.setAttribute('data-unit-id', choice.unitId);
+    selectEl.appendChild(opt);
+    return opt;
+}
 const allVendors = {{ vendors | tojson }};
 const vendorItemsData = {{ vendor_items | tojson }};
 const unitsData = {{ units | tojson }};
@@ -443,6 +488,7 @@ function validateAndRecalculate(changedSelect) {
 // Custom Searchable Dropdown Component
 function initSearchableSelect(selectEl, placeholder = "Search...") {
     if (selectEl.dataset.searchableInitialized) {
+        // If already initialized, just refresh options
         selectEl.dispatchEvent(new Event('refreshCustomSelect'));
         return;
     }
@@ -454,7 +500,7 @@ function initSearchableSelect(selectEl, placeholder = "Search...") {
     wrapper.style.position = 'relative';
     wrapper.style.width = '100%';
     
-    // Hide original select
+    // Hide original select (but keep it in DOM for validation)
     selectEl.style.display = 'none';
     selectEl.parentNode.insertBefore(wrapper, selectEl);
     wrapper.appendChild(selectEl);
@@ -492,44 +538,40 @@ function initSearchableSelect(selectEl, placeholder = "Search...") {
     dropdown.style.display = 'none';
     wrapper.appendChild(dropdown);
     
-    // Function to populate/refresh dropdown options
+    // ── The option list, held as data rather than as DOM ──────────────────
+    //
+    // This used to build one <div> per option — with 4,400+ items that is 4,400
+    // divs and 13,000 event listeners, per row — and then, on every keystroke,
+    // walk all of them reading `.innerText` and writing `.style.display`.
+    //
+    // That loop was the lag. Reading innerText needs an up-to-date layout;
+    // writing display throws the layout away. Alternating the two forces the
+    // browser to re-lay-out the page once per option, so a single character
+    // typed cost thousands of reflows.
+    //
+    // Now the options are a plain array with the lowercase text worked out once,
+    // and only the matches are ever drawn.
+    let choices = [];
+
     function refreshOptions() {
+        // The item picker reads the page-wide catalogue. Every other
+        // searchable select (vendor, unit) still reads its own options,
+        // which are few and are the only place that data lives.
+        if (selectEl.name === 'item_id[]') {
+            choices = ITEM_CHOICES;
+        } else {
+            choices = [];
+            const options = selectEl.options;
+            for (let i = 0; i < options.length; i++) {
+                const opt = options[i];
+                if (opt.value === "") continue;   // skip placeholder
+                choices.push({ value: opt.value, text: opt.text, lower: opt.text.toLowerCase() });
+            }
+        }
+
         dropdown.innerHTML = '';
-        const options = Array.from(selectEl.options);
-        
-        options.forEach(opt => {
-            if (opt.value === "") return;
-            const item = document.createElement('div');
-            item.className = 'searchable-select-item';
-            item.innerText = opt.text;
-            item.dataset.value = opt.value;
-            item.style.padding = '8px 12px';
-            item.style.cursor = 'pointer';
-            item.style.fontSize = '13px';
-            item.style.transition = 'background 0.2s';
-            
-            item.addEventListener('mouseenter', () => {
-                item.style.background = '#f1f5f9';
-            });
-            item.addEventListener('mouseleave', () => {
-                item.style.background = 'transparent';
-            });
-            
-            item.addEventListener('click', (e) => {
-                e.stopPropagation();
-                selectEl.value = opt.value;
-                input.value = opt.text;
-                dropdown.style.display = 'none';
-                
-                selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-                if (typeof selectEl.onchange === 'function') {
-                    selectEl.onchange();
-                }
-            });
-            
-            dropdown.appendChild(item);
-        });
-        
+
+        // Update input display
         const activeOpt = selectEl.options[selectEl.selectedIndex];
         if (activeOpt && activeOpt.value !== "") {
             input.value = activeOpt.text;
@@ -537,70 +579,142 @@ function initSearchableSelect(selectEl, placeholder = "Search...") {
             input.value = '';
         }
     }
-    
+
+    // Drawing every match would put the whole catalogue back into the page, so
+    // the list stops here. Nobody scrolls through fifty near-identical part
+    // codes — they type another character, which is faster for them too.
+    const MAX_SHOWN = 50;
+
+    // Search filter logic
+    function filterItems(searchText) {
+        const search = searchText.trim().toLowerCase();
+        const hits = [];
+        let total = 0;
+
+        for (let i = 0; i < choices.length; i++) {
+            if (search && choices[i].lower.indexOf(search) === -1) continue;
+            total++;
+            if (hits.length < MAX_SHOWN) hits.push(choices[i]);
+        }
+
+        const frag = document.createDocumentFragment();
+        hits.forEach(c => {
+            const item = document.createElement('div');
+            item.className = 'searchable-select-item';
+            item.textContent = c.text;        // textContent, not innerText: no layout needed
+            item.dataset.value = c.value;
+            item.style.cssText = 'padding:8px 12px; cursor:pointer; font-size:13px;';
+            frag.appendChild(item);
+        });
+
+        if (!hits.length) {
+            const noMatch = document.createElement('div');
+            noMatch.className = 'searchable-select-nomatch';
+            noMatch.textContent = search ? 'No matches found' : 'No items';
+            noMatch.style.cssText = 'padding:8px 12px; color:#94a3b8; font-size:13px;';
+            frag.appendChild(noMatch);
+        } else if (total > hits.length) {
+            const more = document.createElement('div');
+            more.textContent = 'Showing ' + hits.length + ' of ' + total +
+                               ' — keep typing to narrow it down';
+            more.style.cssText = 'padding:8px 12px; color:#94a3b8; font-size:12px;' +
+                                 ' border-top:1px solid #f1f5f9;';
+            frag.appendChild(more);
+        }
+
+        dropdown.innerHTML = '';
+        dropdown.appendChild(frag);
+        dropdown.scrollTop = 0;
+    }
+
+    // One set of listeners for the whole list, rather than three per option.
+    dropdown.addEventListener('mouseover', (e) => {
+        const item = e.target.closest('.searchable-select-item');
+        if (item) item.style.background = '#f1f5f9';
+    });
+    dropdown.addEventListener('mouseout', (e) => {
+        const item = e.target.closest('.searchable-select-item');
+        if (item) item.style.background = 'transparent';
+    });
+    dropdown.addEventListener('click', (e) => {
+        const item = e.target.closest('.searchable-select-item');
+        if (!item) return;
+        e.stopPropagation();
+
+        if (selectEl.name === 'item_id[]') {
+            ensureItemOption(selectEl, item.dataset.value);
+        }
+        selectEl.value = item.dataset.value;
+        input.value = item.textContent;
+        dropdown.style.display = 'none';
+
+        // Trigger change event
+        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        if (typeof selectEl.onchange === 'function') {
+            selectEl.onchange();
+        }
+    });
+
+    // Initialize options
     refreshOptions();
-    
+
+    // Listen for select element change externally
     selectEl.addEventListener('refreshCustomSelect', () => {
         refreshOptions();
     });
-    
+
+    // Toggle dropdown
     input.addEventListener('click', (e) => {
         e.stopPropagation();
+        // Close all other dropdowns
         document.querySelectorAll('.searchable-select-dropdown').forEach(d => {
             if (d !== dropdown) d.style.display = 'none';
         });
         const opening = dropdown.style.display === 'none';
         dropdown.style.display = opening ? 'block' : 'none';
-        
+
         if (opening) {
-            // Show all items initially on click to allow changing selection easily
+            // Show the first page of items on click, so the selection can be changed
             filterItems("");
             input.select();
         }
     });
-    
-    function filterItems(searchText) {
-        const items = dropdown.querySelectorAll('.searchable-select-item');
-        const search = searchText.toLowerCase();
-        let visibleCount = 0;
-        
-        items.forEach(item => {
-            const text = item.innerText.toLowerCase();
-            if (text.includes(search)) {
-                item.style.display = 'block';
-                visibleCount++;
-            } else {
-                item.style.display = 'none';
-            }
-        });
-        
-        if (visibleCount === 0 && search !== "") {
-            let noMatch = dropdown.querySelector('.searchable-select-nomatch');
-            if (!noMatch) {
-                noMatch = document.createElement('div');
-                noMatch.className = 'searchable-select-nomatch';
-                noMatch.innerText = 'No matches found';
-                noMatch.style.padding = '8px 12px';
-                noMatch.style.color = '#94a3b8';
-                noMatch.style.fontSize = '13px';
-                dropdown.appendChild(noMatch);
-            }
-        } else {
-            const noMatch = dropdown.querySelector('.searchable-select-nomatch');
-            if (noMatch) noMatch.remove();
-        }
-    }
-    
+
     input.addEventListener('input', () => {
         dropdown.style.display = 'block';
         filterItems(input.value);
+        
+        if (selectEl.name === 'vendor_id') {
+            const val = input.value.trim();
+            if (val !== '') {
+                let opt = Array.from(selectEl.options).find(o => o.value === val || o.text === val);
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = val;
+                    opt.text = val;
+                    selectEl.appendChild(opt);
+                }
+                selectEl.value = opt.value;
+            }
+        }
     });
     
+    // Close dropdown on click outside
     document.addEventListener('click', () => {
         dropdown.style.display = 'none';
         const activeOpt = selectEl.options[selectEl.selectedIndex];
         if (activeOpt && activeOpt.value !== "") {
             input.value = activeOpt.text;
+        } else if (selectEl.name === 'vendor_id' && input.value.trim() !== '') {
+            const val = input.value.trim();
+            let opt = Array.from(selectEl.options).find(o => o.value === val || o.text === val);
+            if (!opt) {
+                opt = document.createElement('option');
+                opt.value = val;
+                opt.text = val;
+                selectEl.appendChild(opt);
+            }
+            selectEl.value = opt.value;
         } else {
             input.value = '';
         }
@@ -687,12 +801,11 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
     const tr = document.createElement('tr');
     tr.id = rowId;
     
-    // Always include all items in the item dropdown
+    // The row's <select> is just the placeholder. Building 4,400 <option>
+    // tags as a template string, per row, and handing them to the HTML parser
+    // was most of the cost of opening this screen. ensureItemOption adds the
+    // one option the row actually needs, below.
     let itemOptions = '<option value="">— Select Item —</option>';
-    allItems.forEach(item => {
-        const selected = item.item_id == itemId ? 'selected' : '';
-        itemOptions += `<option value="${item.item_id}" ${selected} data-unit-id="${item.unit_id}">${item.item_code} — ${item.desc || ''}</option>`;
-    });
     
     // Unit select options
     let unitOptions = '<option value="">— Select Unit —</option>';
@@ -716,12 +829,12 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
             <span style="color: #94a3b8; font-size: 11px;">pick an item</span>
         </td>
         <td>
-            <input type="number" name="qty_ordered[]" step="0.001" min="0.001" required value="${qty}" placeholder="0.000" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+            <input type="number" name="qty_ordered[]" step="any" min="0.000001" required value="${qty}" placeholder="0.000" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
         </td>
         <td>
             <div style="display: flex; align-items: center; gap: 4px;">
                 <span class="currency-symbol" style="font-weight: bold; color: #4a5568;">${symbol}</span>
-                <input type="number" name="unit_price[]" step="0.001" min="0.000" required value="${price}" placeholder="0.000" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                <input type="number" name="unit_price[]" step="0.0001" min="0" required value="${price}" placeholder="0.0000" title="Up to 4 decimal places" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
             </div>
         </td>
         <td>
@@ -737,6 +850,10 @@ function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
     tbody.appendChild(tr);
     
     const itemSelect = tr.querySelector('select[name="item_id[]"]');
+    if (itemId) {
+        ensureItemOption(itemSelect, itemId);
+        itemSelect.value = String(itemId);
+    }
     initSearchableSelect(itemSelect, "Search Item...");
 
     if (itemId) loadRowHsn(tr, itemId);

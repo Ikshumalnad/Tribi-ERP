@@ -211,16 +211,16 @@
             </div>
             <div style="flex:1; min-width:110px; background:#fff; border:1px solid #fde68a; border-radius:8px; padding:12px;">
                 <div style="font-size:11px; color:#92400e; text-transform:uppercase; letter-spacing:0.5px;">Received</div>
-                <div style="font-size:19px; font-weight:700; color:#1e293b;">{{ totals.received }}</div>
+                <div style="font-size:19px; font-weight:700; color:#1e293b;">{{ totals.received|qty }}</div>
             </div>
             <div style="flex:1; min-width:110px; background:#fff; border:1px solid #fde68a; border-radius:8px; padding:12px;">
                 <div style="font-size:11px; color:#92400e; text-transform:uppercase; letter-spacing:0.5px;">Accepted</div>
-                <div style="font-size:19px; font-weight:700; color:#166534;">{{ totals.accepted }}</div>
+                <div style="font-size:19px; font-weight:700; color:#166534;">{{ totals.accepted|qty }}</div>
             </div>
             {% if totals.rejected > 0 %}
             <div style="flex:1; min-width:110px; background:#fff; border:1px solid #fde68a; border-radius:8px; padding:12px;">
                 <div style="font-size:11px; color:#92400e; text-transform:uppercase; letter-spacing:0.5px;">Rejected</div>
-                <div style="font-size:19px; font-weight:700; color:#b91c1c;">{{ totals.rejected }}</div>
+                <div style="font-size:19px; font-weight:700; color:#b91c1c;">{{ totals.rejected|qty }}</div>
             </div>
             {% endif %}
             <div style="flex:1; min-width:130px; background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:12px;">
@@ -251,10 +251,10 @@
                     <tr>
                         <td><strong>{{ it.item_code }}</strong></td>
                         <td>{{ it.item_desc or '—' }}</td>
-                        <td>{{ it.qty_ordered }} {{ it.unit or '' }}</td>
-                        <td>{{ it.qty_received_total }} <span style="color:#64748b;">{{ it.stock_unit }}</span></td>
-                        <td style="color:#166534; font-weight:600;">{{ it.qty_accepted_total }} <span style="color:#64748b; font-weight:400;">{{ it.stock_unit }}</span></td>
-                        <td style="color:#b45309; font-weight:700;">{{ it.qty_forgone }} <span style="color:#64748b; font-weight:400;">{{ it.stock_unit }}</span></td>
+                        <td>{{ it.qty_ordered|qty }} {{ it.unit or '' }}</td>
+                        <td>{{ it.qty_received_total|qty }} <span style="color:#64748b;">{{ it.stock_unit }}</span></td>
+                        <td style="color:#166534; font-weight:600;">{{ it.qty_accepted_total|qty }} <span style="color:#64748b; font-weight:400;">{{ it.stock_unit }}</span></td>
+                        <td style="color:#b45309; font-weight:700;">{{ it.qty_forgone|qty }} <span style="color:#64748b; font-weight:400;">{{ it.stock_unit }}</span></td>
                     </tr>
                 {% endfor %}
                 </tbody>
@@ -343,8 +343,8 @@
                     <tr>
                         <td><strong>{{ item.item_code }}</strong></td>
                         <td>{{ item.item_desc or '—' }}</td>
-                        <td style="text-align: right;">{{ item.qty_ordered }}</td>
-                        <td style="text-align: right;">{{ symbol }}{{ "%.3f"|format(item.unit_price) }}</td>
+                        <td style="text-align: right;">{{ item.qty_ordered|qty }}</td>
+                        <td style="text-align: right;">{{ symbol }}{{ "%.4f"|format(item.unit_price) }}</td>
                         <td style="text-align: right; font-weight: 600;">{{ symbol }}{{ "%.2f"|format(item.qty_ordered * item.unit_price) }}</td>
                         <td>{{ item.unit }}</td>
                     </tr>

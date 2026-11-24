@@ -143,12 +143,7 @@
         <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
             <div style="position: relative; flex: 1; max-width: 460px;" id="detailItemSearchContainer">
                 <div style="display: flex; align-items: center; position: relative;">
-                    <input type="text" 
-                           id="detailItemSearchInput" 
-                           placeholder="🔍 Search / pinpoint item code, description, MPN..." 
-                           class="search-input" 
-                           style="width: 100%; padding-right: 28px; font-size: 13px; font-weight: 600;"
-                           autocomplete="off">
+                    <input style="width: 100%; padding-right: 36px;" type="text" id="detailItemSearchInput" placeholder="Find an item" class="search-input" autocomplete="off">
                     <button type="button" id="clearDetailSearchBtn" onclick="clearDetailItemSearch()" 
                             style="display: none; position: absolute; right: 8px; background: none; border: none; font-size: 14px; color: #94a3b8; cursor: pointer;">✕</button>
                 </div>
@@ -199,15 +194,15 @@
                     <td>{{ item.unit or '—' }}</td>
                     <td>
                         {% if item.po_qty_ordered is not none %}
-                            {{ item.po_qty_ordered }} {{ item.po_unit or '' }}
+                            {{ item.po_qty_ordered|qty }} {{ item.po_unit or '' }}
                         {% else %}<span style="color:#94a3b8;">—</span>{% endif %}
                     </td>
                     <td>
-                        <strong style="color: #1e293b; font-size: 14px;">{{ item.qty_received }}</strong>
+                        <strong style="color: #1e293b; font-size: 14px;">{{ item.qty_received|qty }}</strong>
                         <span style="color:#64748b;">{{ item.unit or '' }}</span>
                         {% if item.qty_in_po_unit is not none and item.po_unit and item.po_unit != item.unit %}
                         <div style="font-size:11px; color:#64748b; margin-top:2px;">
-                            = {{ item.qty_in_po_unit }} {{ item.po_unit }} on the PO
+                            = {{ item.qty_in_po_unit|qty }} {{ item.po_unit }} on the PO
                         </div>
                         {% endif %}
                     </td>
@@ -216,8 +211,8 @@
                             {{ '%.2f'|format(item.line_value) }}
                         {% else %}<span style="color:#94a3b8;">—</span>{% endif %}
                     </td>
-                    <td style="color:#166534; font-weight:600;">{{ item.qty_accepted or 0 }}</td>
-                    <td style="color:{% if (item.qty_rejected or 0) > 0 %}#b91c1c{% else %}#94a3b8{% endif %}; font-weight:600;">{{ item.qty_rejected or 0 }}</td>
+                    <td style="color:#166534; font-weight:600;">{{ (item.qty_accepted or 0)|qty }}</td>
+                    <td style="color:{% if (item.qty_rejected or 0) > 0 %}#b91c1c{% else %}#94a3b8{% endif %}; font-weight:600;">{{ (item.qty_rejected or 0)|qty }}</td>
                     <td>
                         {% if item.po_outstanding is not none %}
                             <strong style="color:{% if item.po_outstanding > 0 %}#b45309{% else %}#94a3b8{% endif %};">{{ item.po_outstanding }}</strong>

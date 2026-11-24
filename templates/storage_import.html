@@ -165,7 +165,7 @@
     </div>
     <div style="flex:1; min-width:130px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px;">
         <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Total quantity</div>
-        <div style="font-size:20px; font-weight:700; color:#1e293b;">{{ preview.total_qty }}</div>
+        <div style="font-size:20px; font-weight:700; color:#1e293b;">{{ preview.total_qty|qty }}</div>
     </div>
 </div>
 
@@ -173,7 +173,7 @@
 <div class="alert alert-warning" style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
     <strong>Quantities are added to existing stock.</strong>
     {{ preview.items_with_stock }} item(s) in this file already hold stock
-    ({{ preview.qty_already_held }} in total), and the figures below will be added
+    ({{ preview.qty_already_held|qty }} in total), and the figures below will be added
     to what they have. Importing the same file twice will count it twice.
 </div>
 {% else %}
@@ -317,7 +317,7 @@
                 <td>{{ r.mpn or '—' }}</td>
                 <td style="color:#94a3b8; font-family:monospace; font-size:12px;">{{ r.mpn_raw or '—' }}</td>
                 <td>{{ r.location or '—' }}</td>
-                <td style="font-weight:600;">{{ r.qty }}</td>
+                <td style="font-weight:600;">{{ r.qty|qty }}</td>
             </tr>
         {% endfor %}
         </tbody>

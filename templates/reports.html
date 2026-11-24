@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <h1>Reports</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <a href="/reports/export?from_date={{ filters.from_date }}&to_date={{ filters.to_date }}&source={{ filters.source }}&vendor_id={{ filters.vendor_id or '' }}&item_code={{ filters.item_code }}"
+           class="btn btn-primary" style="text-decoration:none;">⬇ Export to Excel</a>
+    </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<div class="filter-bar">
+    <form method="get" action="/reports"
+          style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
+
+        <div>
+            <label style="display:block; font-size:12px; font-weight:600; color:#64748b; margin-bottom:4px;">From</label>
+            <input type="date" name="from_date" value="{{ filters.from_date }}" class="search-input" style="min-width:150px;">
+        </div>
+
+        <div>
+            <label style="display:block; font-size:12px; font-weight:600; color:#64748b; margin-bottom:4px;">To</label>
+            <input type="date" name="to_date" value="{{ filters.to_date }}" class="search-input" style="min-width:150px;">
+        </div>
+
+        <div>
+            <label style="display:block; font-size:12px; font-weight:600; color:#64748b; margin-bottom:4px;">Show</label>
+            <select name="source" class="search-input" style="min-width:170px;">
+                <option value="both" {% if filters.source == 'both' %}selected{% endif %}>Purchase orders and GRNs</option>
+                <option value="po"   {% if filters.source == 'po'   %}selected{% endif %}>Purchase orders only</option>
+                <option value="grn"  {% if filters.source == 'grn'  %}selected{% endif %}>GRNs only</option>
+            </select>
+        </div>
+
+        <div>
+            <label style="display:block; font-size:12px; font-weight:600; color:#64748b; margin-bottom:4px;">Vendor</label>
+            <select name="vendor_id" class="search-input" style="min-width:230px;">
+                <option value="">All vendors</option>
+                {% for v in vendors %}
+                <option value="{{ v.vendor_id }}" {% if filters.vendor_id == v.vendor_id %}selected{% endif %}>
+                    {{ v.short_name or v.full_name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label style="display:block; font-size:12px; font-weight:600; color:#64748b; margin-bottom:4px;">Item code</label>
+            <input type="text" name="item_code" value="{{ filters.item_code }}"
+                   placeholder="full or partial" class="search-input" style="min-width:170px;">
+        </div>
+
+        <button type="submit" class="btn-dark">Run report</button>
+        <a href="/reports" class="btn-outline">Clear</a>
+    </form>
+</div>
+
+<div style="margin:18px 0; display:flex; gap:14px; flex-wrap:wrap;">
+    {% set tiles = [
+        ('Lines', '{:,}'.format(totals.lines), '#0f172a', 'PO ' ~ totals.po_lines ~ ' · GRN ' ~ totals.grn_lines),
+        ('Ordered value', '{:,.2f}'.format(totals.value), '#0f172a', 'sum of PO lines in range'),
+        ('Qty received', totals.qty_received|qty, '#b45309', 'across GRN lines'),
+        ('Qty accepted', totals.qty_accepted|qty, '#166534', 'what reached stock'),
+        ('Qty rejected', totals.qty_rejected|qty, '#b91c1c', 'never reached stock'),
+    ] %}
+    {% for label, value, colour, note in tiles %}
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:14px 20px; min-width:160px; flex:1; box-shadow:0 2px 4px rgba(0,0,0,0.04);">
+        <div style="font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">{{ label }}</div>
+        <div style="font-size:22px; font-weight:700; color:{{ colour }}; margin-top:2px;">{{ value }}</div>
+        <div style="font-size:11px; color:#94a3b8; margin-top:2px;">{{ note }}</div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if truncated %}
+<div class="alert alert-info" style="margin-bottom:14px;">
+    Showing the first {{ screen_limit }} of {{ "{:,}".format(totals.lines) }} lines.
+    The Excel export has all of them.
+</div>
+{% endif %}
+
+<div style="overflow-x:auto; background:#fff; border:1px solid #e2e8f0; border-radius:10px;">
+<table class="data-table" style="min-width:1600px;">
+    <thead>
+        <tr>
+            {% for key, label, width in columns %}
+            <th style="white-space:nowrap;">{{ label }}</th>
+            {% endfor %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in rows %}
+        <tr>
+            <td>
+                <span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;
+                             {% if r.source == 'PO' %}background:#e0f2fe; color:#0369a1;{% else %}background:#dcfce7; color:#166534;{% endif %}">
+                    {{ r.source }}
+                </span>
+            </td>
+            <td style="white-space:nowrap;">{{ r.doc_date.strftime('%d-%b-%Y') if r.doc_date else '' }}</td>
+            <td style="white-space:nowrap;">{{ r.doc_no }}</td>
+            <td>{{ r.vendor_name }}</td>
+            <td style="white-space:nowrap; font-weight:600;">{{ r.item_code }}</td>
+            <td>{{ r.item_desc }}</td>
+            <td>{{ r.mpn }}</td>
+            <td>{{ r.manufacturer }}</td>
+            <td style="white-space:nowrap;">{{ r.hsn_code }}</td>
+            <td>{{ r.unit }}</td>
+            <td style="text-align:right;">{{ r.qty_ordered|qty if r.qty_ordered is not none else '' }}</td>
+            <td style="text-align:right;">{{ '{:,.4f}'.format(r.rate) if r.rate is not none else '' }}</td>
+            <td style="text-align:right;">{{ '{:,.2f}'.format(r.value) if r.value is not none else '' }}</td>
+            <td style="text-align:right;">{{ r.qty_received|qty if r.qty_received is not none else '' }}</td>
+            <td style="text-align:right; color:#166534;">{{ r.qty_accepted|qty if r.qty_accepted is not none else '' }}</td>
+            <td style="text-align:right; color:#b91c1c;">{{ r.qty_rejected|qty if r.qty_rejected is not none else '' }}</td>
+            <td style="white-space:nowrap;">{{ r.status }}</td>
+            <td style="text-align:right;">{{ r.current_stock|qty }}</td>
+            <td>{{ r.store_location }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="{{ columns | length }}" style="text-align:center; padding:40px; color:#94a3b8;">
+                Nothing in that range. Widen the dates, or clear the vendor and item filters.
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div style="margin-top:12px; font-size:12px; color:#94a3b8; line-height:1.7;">
+    A PO line is dated by when the purchase order was raised; a GRN line by when it was received.
+    Blank means not applicable — a PO line has no received quantity, a GRN line has no rate.
+    <strong>Stock Now</strong> is what the item holds today, not what it held at the time of the transaction.
+</div>
+{% endblock %}

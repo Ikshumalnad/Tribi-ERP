@@ -30,7 +30,7 @@
         </div>
         <div>
             <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Sets</div>
-            <div>{{ wo.qty_to_build }}</div>
+            <div>{{ wo.qty_to_build|qty }}</div>
         </div>
         <div>
             <div style="font-size:11px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">Status</div>
@@ -70,9 +70,7 @@
 
 <div style="margin-bottom:16px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
     <div style="display:flex; gap:8px; align-items:center;">
-        <span style="font-size:13px; font-weight:600; color:#4a5568;">Search Requirements:</span>
-        <input type="text" id="req-search" placeholder="Search by item code or description..." 
-               style="width:320px; padding:8px 12px; font-size:13px; border:1px solid #cbd5e1; border-radius:6px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); outline: none;">
+        <input class="search-input" type="text" id="req-search" placeholder="Search items">
     </div>
     <div style="display:flex; gap:8px; align-items:center;">
         <span style="font-size:13px; font-weight:600; color:#4a5568;">Pending Filter:</span>
@@ -139,17 +137,17 @@
                         no conversion
                     </span>
                 {% else %}
-                    <span id="qty_req_{{ item.wo_item_id }}" style="font-weight:500;">{{ item.qty_required }}</span>
+                    <span id="qty_req_{{ item.wo_item_id }}" style="font-weight:500;">{{ item.qty_required|qty }}</span>
                     {% if item.bom_unit and item.bom_unit != item.unit %}
                     <span style="color:#64748b; font-size:11px;">{{ item.unit }}</span>
                     {% endif %}
                 {% endif %}
             </td>
-            <td>{{ item.wo_blocked }}</td>
+            <td>{{ item.wo_blocked|qty }}</td>
             <td>
-                <span id="pending_{{ item.wo_item_id }}" title="Still to issue: required minus issued"
+                <span id="pending_{{ item.wo_item_id }}" data-qty="{{ item.pending }}" title="Still to issue: required minus issued"
                       style="font-weight:{% if item.pending > 0 %}600{% else %}500{% endif %}; color:{% if item.pending > 0 %}#b45309{% else %}#27ae60{% endif %};">
-                    {{ item.pending }}
+                    {{ item.pending|qty }}
                 </span>
             </td>
             <td>
@@ -158,12 +156,12 @@
                     {{ item.shortage }}
                 </span>
             </td>
-            <td>{{ item.available }}</td>
-            <td>{{ item.qty_issued }}</td>
+            <td>{{ item.available|qty }}</td>
+            <td>{{ item.qty_issued|qty }}</td>
             <td>
                 <span id="additional_{{ item.wo_item_id }}" title="Issued beyond the required quantity"
                       style="font-weight:{% if item.additional_issued > 0 %}600{% else %}500{% endif %}; color:{% if item.additional_issued > 0 %}#7c3aed{% else %}#94a3b8{% endif %};">
-                    {{ item.additional_issued }}
+                    {{ item.additional_issued|qty }}
                 </span>
             </td>
             <td style="white-space: nowrap;">
@@ -235,9 +233,9 @@
             <td>{{ item.mpn or '—' }}</td>
             <td>{{ item.manufacturer_name or '—' }}</td>
             <td>{{ item.unit or '—' }}</td>
-            <td>{{ item.bom_qty }}</td>
-            <td>{{ item.qty_required }}</td>
-            <td>{{ item.available }}</td>
+            <td>{{ item.bom_qty|qty }}</td>
+            <td>{{ item.qty_required|qty }}</td>
+            <td>{{ item.available|qty }}</td>
             <td>
                 <form method="post" action="/work-order/{{ wo.wo_id }}/item/{{ item.wo_item_id }}/restore" style="margin:0;">
                     <button type="submit" class="btn btn-success" style="font-size:12px; padding:4px 12px;">Restore back to work order</button>
@@ -439,6 +437,21 @@
 </div>
 
 <script>
+// Same rule as the server's |qty filter: at most two decimals, no trailing
+// zeros, and a real quantity too small to show at two places keeps two
+// significant figures rather than reading as 0. Used when a line is edited in
+// place, so the figure written back looks like the one the page loaded with.
+function fmtQty(v) {
+    if (v === null || v === undefined || v === '') return '';
+    const n = Number(v);
+    if (isNaN(n)) return String(v);
+    if (n === 0) return '0';
+    let s = n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (Math.abs(n) < 0.0000005) return '0';
+    if (s === '0' || s === '-0') s = n > 0 ? '< 0.01' : '> -0.01';
+    return s;
+}
+
 let selectModeActive = false;
 
 function toggleSelectMode(active) {
@@ -772,11 +785,12 @@ function proceedBomQtyUpdate() {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            document.getElementById('qty_req_' + wiId).textContent = data.qty_required;
+            document.getElementById('qty_req_' + wiId).textContent = fmtQty(data.qty_required);
 
             const pendingSpan = document.getElementById('pending_' + wiId);
             if (pendingSpan) {
-                pendingSpan.textContent = data.pending;
+                pendingSpan.dataset.qty  = data.pending;
+                pendingSpan.textContent  = fmtQty(data.pending);
                 pendingSpan.style.color      = data.pending > 0 ? '#b45309' : '#27ae60';
                 pendingSpan.style.fontWeight = data.pending > 0 ? '600' : '500';
             }
@@ -820,7 +834,7 @@ function filterRequirements() {
         const matchesSearch = codeText.includes(query) || descText.includes(query);
         
         const pendingSpan = row.querySelector('span[id^="pending_"]');
-        const shortageVal = pendingSpan ? parseFloat(pendingSpan.textContent.trim()) : 0.0;
+        const shortageVal = pendingSpan ? parseFloat(pendingSpan.dataset.qty) : 0.0;
         
         let matchesFilter = true;
         if (filterVal === 'has-shortage') {
