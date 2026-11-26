@@ -64,7 +64,7 @@ def _load_secret_key():
 app.secret_key = _load_secret_key()
 
 # Application version shown in the navbar. Update this one line on each release.
-APP_VERSION = '1.1.e'
+APP_VERSION = '1.1.f'
 
 # Decimal places kept on every quantity.
 #
@@ -9343,6 +9343,57 @@ def reports_export():
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
         download_name=name)
+
+
+# ─── Serving under a folder such as /ERP ────────────────────────────────
+# The app's redirects say "/grn/add/purchase", as if it sat at the root of
+# the site. Behind a web server that publishes it at /ERP/, the browser then
+# leaves the app for whatever owns the root -- the other application -- and
+# gets its 404. This puts the folder back on every redirect.
+#
+# Where the folder comes from, first that is set:
+#   TRIBI_URL_PREFIX   environment variable on the server, e.g. /ERP
+#   X-Forwarded-Prefix header, if the web server in front sends one
+#   tribi_root         cookie the pages set from the address bar (fallback)
+# On a PC running the app directly none is set and nothing changes.
+_URL_PREFIX_RE = re.compile(r'^(/[A-Za-z0-9._-]+)*$')
+
+
+def url_prefix():
+    for cand in (os.environ.get('TRIBI_URL_PREFIX'),
+                 request.headers.get('X-Forwarded-Prefix'),
+                 request.cookies.get('tribi_root')):
+        if cand is None:
+            continue
+        from urllib.parse import unquote
+        cand = unquote(cand).strip().rstrip('/')
+        if cand and not cand.startswith('/'):
+            cand = '/' + cand
+        if _URL_PREFIX_RE.match(cand):
+            return cand
+    return ''
+
+
+@app.after_request
+def keep_redirects_in_folder(response):
+    location = response.headers.get('Location')
+    if not location:
+        return response
+    prefix = url_prefix()
+    if not prefix:
+        return response
+    from urllib.parse import urlsplit, urlunsplit
+    parts = urlsplit(location)
+    if parts.netloc and parts.netloc != request.host:
+        return response                      # somewhere else entirely
+    path = parts.path
+    if not path.startswith('/') or path.startswith('//'):
+        return response
+    if path == prefix or path.startswith(prefix + '/'):
+        return response                      # already inside the folder
+    response.headers['Location'] = urlunsplit(
+        ('', '', prefix + path, parts.query, parts.fragment))
+    return response
 
 
 # The name and role in the session were copied at login and never looked at

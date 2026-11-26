@@ -1,0 +1,83 @@
+{#- Keeps every address inside the folder the app is served from (e.g. /ERP).
+
+    The pages and scripts were written as if the app sat at the root of the
+    site: href="/grn", fetch('/api/...'), form.action = '/grn/5/edit-po'.
+    On the server it sits under /ERP/, and the web server in front of it fixes
+    the plain links in the HTML but nothing built by script. Those went to
+    the root of the site -- the other application -- and came back 404.
+
+    The folder is worked out from the address bar: the server tells this page
+    its own path, without the leading slash so nothing in front of the app
+    rewrites it, and whatever comes before that in the browser's address is
+    the folder. On a PC running the app directly that is empty and nothing
+    here changes anything. Every fix is idempotent: an address that already
+    starts with the folder is left alone, so this cannot double it.          -#}
+<script>
+(function () {
+    var appPath = '/' + (document.documentElement.getAttribute('data-app-path') || '');
+    var here = location.pathname, root = '';
+    if (here.length > appPath.length && here.slice(-appPath.length) === appPath) {
+        root = here.slice(0, here.length - appPath.length);
+    }
+    if (!/^(\/[A-Za-z0-9._-]+)*$/.test(root)) root = '';
+    window.TRIBI_ROOT = root;
+    // Lets the server send redirects into the same folder even when it has
+    // not been told the folder itself (TRIBI_URL_PREFIX is the proper way).
+    // root holds only letters, digits, . _ - and / (checked above), so it is cookie-safe as it is.
+    try { document.cookie = 'tribi_root=' + root + '; path=/; SameSite=Lax'; } catch (e) {}
+    function fix(u) {
+        if (!root || typeof u !== 'string' || u.charAt(0) !== '/' || u.charAt(1) === '/') return u;
+        if (u === root || u.indexOf(root + '/') === 0 || u.indexOf(root + '?') === 0) return u;
+        return root + u;
+    }
+    window.appUrl = fix;
+    if (!root) return;
+
+    if (window.fetch) {
+        var _fetch = window.fetch;
+        window.fetch = function (input, init) {
+            return _fetch.call(this, typeof input === 'string' ? fix(input) : input, init);
+        };
+    }
+    var _xhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        arguments[1] = fix(url);
+        return _xhrOpen.apply(this, arguments);
+    };
+    var _open = window.open;
+    window.open = function (url) {
+        arguments[0] = fix(url);
+        return _open.apply(window, arguments);
+    };
+
+    function fixAttr(el, name) {
+        var v = el.getAttribute(name);
+        if (v) { var n = fix(v); if (n !== v) el.setAttribute(name, n); }
+    }
+    function sweep(node) {
+        if (!node || node.nodeType !== 1) return;
+        if (node.matches('a[href]')) fixAttr(node, 'href');
+        if (node.matches('form[action]')) fixAttr(node, 'action');
+        var list = node.querySelectorAll('a[href], form[action]');
+        for (var i = 0; i < list.length; i++) fixAttr(list[i], list[i].tagName === 'A' ? 'href' : 'action');
+    }
+    // A form whose action is set by script and submitted on the same line
+    // never gives the observer below a chance, so submitting checks too.
+    var _submit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function () { fixAttr(this, 'action'); return _submit.apply(this, arguments); };
+    document.addEventListener('submit', function (e) { if (e.target && e.target.getAttribute) fixAttr(e.target, 'action'); }, true);
+    document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (a) fixAttr(a, 'href');
+    }, true);
+    document.addEventListener('DOMContentLoaded', function () {
+        sweep(document.body);
+        new MutationObserver(function (records) {
+            records.forEach(function (r) {
+                if (r.type === 'attributes') fixAttr(r.target, r.attributeName);
+                else r.addedNodes.forEach(sweep);
+            });
+        }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'action'] });
+    });
+})();
+</script>
