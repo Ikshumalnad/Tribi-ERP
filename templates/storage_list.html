@@ -86,7 +86,7 @@
                 <td>{{ s.item_desc or '—' }}</td>
                 <td>{{ s.manufacturer_name or '—' }}</td>
                 <td>{{ s.mpn or '—' }}</td>
-                <td>{{ s.store_location }}</td>
+                <td>{% if s.store_location %}{{ s.store_location }}{% else %}<span style="color:#94a3b8;">—</span>{% endif %}</td>
                 <td>{{ s.physical_availability|qty }}</td>
                 <td>{{ s.currently_available|qty }}</td>
                 <td style="white-space: nowrap;">

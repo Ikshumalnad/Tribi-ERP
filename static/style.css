@@ -921,3 +921,10 @@ code, kbd, pre, samp {
 @media (max-width: 760px) {
     .greet-when { display: none; }
 }
+
+/* ─── PO lines: Add Item sits under the table (v1.1.g) ────────────────── */
+.add-item-btn {
+    margin-top: 12px;
+    font-size: 13px;
+    padding: 7px 14px;
+}

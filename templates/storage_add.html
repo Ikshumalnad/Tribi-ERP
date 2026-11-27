@@ -93,9 +93,10 @@
 
         <div class="form-grid">
             <div class="form-group">
-                <label>Store Location <span class="required">*</span></label>
+                <label>Store Location <span style="font-weight:400; color:#94a3b8;">(optional)</span></label>
                 <input type="text" name="store_location" id="store_location_input" class="input-field"
-                       placeholder="e.g. Rack A-3" required value="{{ form.store_location or '' }}">
+                       placeholder="e.g. Rack A-3 — leave blank if not known" value="{{ form.store_location or '' }}">
+                <input type="hidden" name="location_loaded" id="location_loaded" value="0">
                 <div id="location_notice" style="display: none; font-size: 12px; color: #2563eb; margin-top: 6px; font-weight: 600;"></div>
             </div>
             <div class="form-group">
@@ -228,19 +229,31 @@ document.addEventListener('DOMContentLoaded', function() {
         // and stay editable for good if it fails.
         setItemFields('existing', {});
         noteDesc.textContent = 'Loading from the item master…';
+        document.getElementById('location_loaded').value = '0';   // not trusted until the lookup answers
         fetch('/api/item-storage-location/' + itemId)
             .then(res => res.json())
             .then(data => {
                 setItemFields('existing', data);
                 showItemHsn(data.hsn_id, data.hsn_code, data.hsn_rate);
                 if (data.exists) {
-                    locationInput.value = data.location;
-                    locationInput.readOnly = true;
-                    locationInput.style.backgroundColor = LOCKED_BG;
-                    locationNotice.innerText = '🔒 Item already assigned to location "' + data.location +
-                        '" (' + data.physical_availability + ' in stock). New quantity will be added to this location.';
+                    // Filled in, but left editable: change it to move the
+                    // item, clear it to leave the item without a location.
+                    const current = data.location || '';
+                    const inStock = Number(data.physical_availability || 0)
+                        .toLocaleString('en-US', { maximumFractionDigits: 2 });
+                    locationInput.value = current;
+                    locationInput.readOnly = false;
+                    locationInput.style.backgroundColor = '';
+                    locationInput.dataset.current = current;
+                    document.getElementById('location_loaded').value = '1';
+                    locationNotice.innerText = (current
+                        ? 'Currently at "' + current + '" (' + inStock + ' in stock). '
+                        : 'No location set yet (' + inStock + ' in stock). ')
+                        + 'Change it to move the item, or clear it to remove the location. '
+                        + 'The quantity below is added to the stock.';
                     locationNotice.style.display = 'block';
                 } else {
+                    document.getElementById('location_loaded').value = '0';
                     locationInput.readOnly = false;
                     locationInput.style.backgroundColor = '';
                     locationNotice.style.display = 'none';
@@ -282,6 +295,7 @@ document.addEventListener('DOMContentLoaded', function() {
             locationInput.readOnly = false;
             locationInput.style.backgroundColor = '';
             locationNotice.style.display = 'none';
+            document.getElementById('location_loaded').value = '0';
             showItemHsn(null, null, null);
             if (val === '') {
                 codeNotice.textContent = 'Existing codes are suggested as you type.';

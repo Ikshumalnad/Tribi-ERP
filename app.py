@@ -64,7 +64,7 @@ def _load_secret_key():
 app.secret_key = _load_secret_key()
 
 # Application version shown in the navbar. Update this one line on each release.
-APP_VERSION = '1.1.f'
+APP_VERSION = '1.1.h'
 
 # Decimal places kept on every quantity.
 #
@@ -5699,7 +5699,7 @@ def grn_qc(grn_id):
                         else:
                             cursor.execute("UPDATE storage SET physical_availability = physical_availability + %s WHERE store_id = %s", (delta, s_row['store_id']))
                     else:
-                        store_loc = loc or 'Main Store'
+                        store_loc = loc or ''          # no location given: leave it blank
                         cursor.execute("INSERT INTO storage (item_id, store_location, physical_availability, created_at) VALUES (%s, %s, %s, NOW())", (item_id, store_loc, delta))
                 
                 cursor.execute("""
@@ -7682,7 +7682,7 @@ def storage_import():
         return render_template('storage_import.html')
 
     stage = request.form.get('stage', 'preview')
-    default_location = (request.form.get('default_location') or 'Main Store').strip()
+    default_location = ' '.join((request.form.get('default_location') or '').split())
 
     if stage == 'confirm':
         token = request.form.get('token', '')
@@ -8295,12 +8295,37 @@ def storage_add():
         existing = cursor.fetchone()
         if existing:
             new_total = float(existing['physical_availability'] or 0) + physical_availability
-            cursor.execute("UPDATE storage SET physical_availability = %s WHERE store_id = %s", (new_total, existing['store_id']))
-            flash(f"Added {physical_availability} units to existing storage location '{existing['store_location']}' (New Total: {new_total}).", 'success')
+            old_loc = ' '.join((existing['store_location'] or '').split())
+            new_loc = ' '.join(store_location.split())
+            # The location box is filled with the item's current location and
+            # left editable, so whatever it holds on save is what was meant --
+            # a new rack, the same one, or nothing. Only trusted when the page
+            # confirms it loaded the current value; otherwise a failed lookup
+            # would leave the box empty and silently wipe a real location.
+            change_loc = request.form.get('location_loaded') == '1' and new_loc != old_loc
+            if change_loc:
+                cursor.execute("UPDATE storage SET physical_availability = %s, store_location = %s WHERE store_id = %s",
+                               (new_total, new_loc, existing['store_id']))
+            else:
+                cursor.execute("UPDATE storage SET physical_availability = %s WHERE store_id = %s", (new_total, existing['store_id']))
+            added = fmt_qty(physical_availability)
+            total = fmt_qty(new_total)
+            if change_loc and new_loc and old_loc:
+                where = f"Location changed from '{old_loc}' to '{new_loc}'."
+            elif change_loc and new_loc:
+                where = f"Location set to '{new_loc}'."
+            elif change_loc:
+                where = f"Location '{old_loc}' removed; the item now has no location."
+            else:
+                where = f"Location: '{old_loc}'." if old_loc else "No location set."
+            if physical_availability:
+                flash(f"Added {added} to stock (new total {total}). {where}", 'success')
+            else:
+                flash(f"Stock unchanged at {total}. {where}", 'success')
         else:
             cursor.execute("""INSERT INTO storage (item_id, store_location, physical_availability, created_at)
                               VALUES (%s, %s, %s, NOW())""",
-                           (item_id, store_location or 'Main Store', physical_availability))
+                           (item_id, ' '.join(store_location.split()), physical_availability))
             if created_item:
                 flash(f"Item '{new_code}' created and {physical_availability} recorded in stock.", 'success')
             else:
@@ -8381,7 +8406,9 @@ def storage_edit(store_id):
     cursor = db.cursor(dictionary=True)
     if request.method == 'POST':
         item_id = request.form['item_id']
-        store_location = request.form['store_location']
+        # Optional, like everywhere else a location is asked for: blank is
+        # stored as blank rather than an invented 'Main Store'.
+        store_location = ' '.join((request.form.get('store_location') or '').split())
         physical_availability = request.form.get('physical_availability', 0)
         cursor.execute("""UPDATE storage SET item_id=%s, store_location=%s, physical_availability=%s
                           WHERE store_id=%s""",

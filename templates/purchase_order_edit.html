@@ -77,9 +77,8 @@
             {% endif %}
         </div>
 
-        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="font-size: 15px; font-weight: 600; color: #1a2e4a; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px;">
             Purchase Order Items
-            <button type="button" class="btn btn-success" style="font-size: 12px; padding: 4px 10px;" onclick="addItemRow()">+ Add Item</button>
         </h3>
 
         <div style="margin-bottom: 24px; overflow: visible;">
@@ -98,6 +97,9 @@
                     <!-- Javascript will insert rows here -->
                 </tbody>
             </table>
+            {#- Below the lines, where the next one appears, rather than up in
+                the heading where it sat apart from the rows it adds. -#}
+            <button type="button" class="btn btn-success add-item-btn" onclick="addItemAndFocus()">+ Add Item</button>
         </div>
 
         {% if is_amend %}
@@ -792,6 +794,18 @@ function loadRowHsn(row, itemId) {
         .then(r => r.json())
         .then(d => setRowHsn(row, d.hsn_id, d.hsn_code, d.hsn_rate))
         .catch(() => setRowHsn(row, null, null, null));
+}
+
+// Adds a line and puts the cursor in its item search, so the button below
+// the table can be pressed again and again without hunting for the new row.
+function addItemAndFocus() {
+    addItemRow();
+    const rows = document.querySelectorAll('#itemsTableBody tr');
+    const last = rows[rows.length - 1];
+    if (!last) return;
+    const box = last.querySelector('input.searchable-select-input');
+    last.scrollIntoView({ block: 'nearest' });
+    if (box) box.focus();
 }
 
 function addItemRow(itemId = '', qty = '', price = '', unitId = '') {
